@@ -1,0 +1,361 @@
+'use client';
+
+import React, { useState, useEffect, useMemo } from 'react';
+import { Activity, Move, Compass } from 'lucide-react';
+
+type Stats = { behavior: string; mobility: number; orientation: number; hand_speed?: number };
+type Sample = { ts: number; behavior: string; mobility: number; orientation: number; hand_speed?: number };
+
+export default function TeacherBehaviorPage() {
+    const [stats, setStats] = useState<Stats>({ behavior: 'Initializing...', mobility: 0, orientation: 0 });
+
+    // Session recording state
+    const [isRecording, setIsRecording] = useState(false);
+    const [sessionStart, setSessionStart] = useState<number | null>(null);
+    const [sessionEnd, setSessionEnd] = useState<number | null>(null);
+    const [sessionBuffer, setSessionBuffer] = useState<Sample[]>([]);
+    const [summary, setSummary] = useState<string | null>(null);
+
+    const LIVE_WINDOW_SEC = 180; // 3 minutes
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            fetch('http://localhost:8000/api/teacher_stats')
+                .then(res => res.json())
+                .then((data: Stats) => {
+                    setStats(data);
+                    if (isRecording && sessionStart) {
+                        const sample: Sample = {
+                            ts: Date.now(),
+                            behavior: data.behavior,
+                            mobility: data.mobility,
+                            orientation: data.orientation,
+                            hand_speed: (data as any).hand_speed ?? 0,
+                        };
+                        setSessionBuffer(prev => [...prev, sample]);
+                    }
+                })
+                .catch(err => console.error(err));
+        }, 500);
+        return () => clearInterval(interval);
+    }, [isRecording, sessionStart]);
+
+    const getBehaviorColor = (b: string) => {
+        if (b === 'INTERACTIVE') return 'text-emerald-400';
+        if (b === 'LECTURING') return 'text-blue-400';
+        return 'text-orange-400';
+    };
+
+    const behaviorBg = (b: string) => {
+        if (b === 'INTERACTIVE') return 'bg-emerald-400';
+        if (b === 'LECTURING') return 'bg-blue-400';
+        return 'bg-orange-400';
+    };
+
+    // Derived live window
+    const liveWindow = useMemo(() => {
+        const cutoff = Date.now() - LIVE_WINDOW_SEC * 1000;
+        return sessionBuffer.filter(s => s.ts >= cutoff);
+    }, [sessionBuffer]);
+
+    // Distribution over session (or live if no session data)
+    const distribution = useMemo(() => {
+        const source = sessionBuffer.length ? sessionBuffer : liveWindow;
+        const counts: Record<string, number> = { PASSIVE: 0, LECTURING: 0, INTERACTIVE: 0 };
+        source.forEach(s => {
+            const b = s.behavior === 'INTERACTIVE' ? 'INTERACTIVE' : s.behavior === 'LECTURING' ? 'LECTURING' : 'PASSIVE';
+            counts[b] += 1;
+        });
+        const total = source.length || 1;
+        return {
+            passive: Math.round((counts['PASSIVE'] / total) * 100),
+            lecturing: Math.round((counts['LECTURING'] / total) * 100),
+            interactive: Math.round((counts['INTERACTIVE'] / total) * 100),
+            counts,
+        };
+    }, [sessionBuffer, liveWindow]);
+
+    const DistributionCard = ({ passive, lecturing, interactive }: { passive: number; lecturing: number; interactive: number }) => (
+        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
+            <h3 className="text-gray-400 text-sm font-medium mb-3">Behavior Distribution</h3>
+            <div className="mb-3">
+                <div className="text-sm text-gray-300">Passive <span className="text-gray-500">{passive}%</span></div>
+                <div className="w-full bg-gray-700 rounded h-3 mt-1 overflow-hidden"><div className={`h-3 ${passive > 0 ? 'bg-orange-400' : 'bg-transparent'}`} style={{ width: `${passive}%` }} /></div>
+            </div>
+            <div className="mb-3">
+                <div className="text-sm text-gray-300">Lecturing <span className="text-gray-500">{lecturing}%</span></div>
+                <div className="w-full bg-gray-700 rounded h-3 mt-1 overflow-hidden"><div className={`h-3 ${lecturing > 0 ? 'bg-blue-400' : 'bg-transparent'}`} style={{ width: `${lecturing}%` }} /></div>
+            </div>
+            <div>
+                <div className="text-sm text-gray-300">Interactive <span className="text-gray-500">{interactive}%</span></div>
+                <div className="w-full bg-gray-700 rounded h-3 mt-1 overflow-hidden"><div className={`h-3 ${interactive > 0 ? 'bg-emerald-400' : 'bg-transparent'}`} style={{ width: `${interactive}%` }} /></div>
+            </div>
+        </div>
+    );
+
+    const TimelineStrip = ({ samples }: { samples: Sample[] }) => {
+        const counts: Record<string, number> = { PASSIVE: 0, LECTURING: 0, INTERACTIVE: 0 };
+        samples.forEach(s => {
+            const b = s.behavior === 'INTERACTIVE' ? 'INTERACTIVE' : s.behavior === 'LECTURING' ? 'LECTURING' : 'PASSIVE';
+            counts[b] += 1;
+        });
+        const total = samples.length || 1;
+        return (
+            <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                <h3 className="text-gray-400 text-sm mb-2">Recent Behavior (last {LIVE_WINDOW_SEC}s)</h3>
+                <div className="flex items-center gap-2 mb-3">
+                    <div className="flex-1 h-4 bg-gray-700 rounded overflow-hidden flex items-center">
+                        {samples.map((s, i) => (
+                            <div key={s.ts + '-' + i} className={`inline-block h-4`} style={{ width: 6, background: undefined }}>
+                                <div className={`${behaviorBg(s.behavior)} h-4 w-full`} />
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="text-xs text-gray-400">Counts: Passive {counts['PASSIVE']}, Lecturing {counts['LECTURING']}, Interactive {counts['INTERACTIVE']}</div>
+            </div>
+        );
+    };
+
+    const [sessionSnapshot, setSessionSnapshot] = useState<Sample[] | null>(null);
+    const [summaryMetrics, setSummaryMetrics] = useState<any | null>(null);
+
+    const downloadCSV = () => {
+        if (!sessionSnapshot) return;
+        const header = ['timestamp_iso', 'behavior', 'mobility', 'orientation', 'hand_speed'];
+        const rows = sessionSnapshot.map(s => [new Date(s.ts).toISOString(), s.behavior, String(s.mobility), String(s.orientation), String(s.hand_speed ?? '')]);
+        const csv = [header.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `session_${new Date((sessionSnapshot[0]?.ts) || Date.now()).toISOString().replace(/[:.]/g, '-')}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const downloadSummaryTxt = () => {
+        if (!summaryMetrics) return;
+        const lines = [] as string[];
+        lines.push(`Session start: ${summaryMetrics.startISO}`);
+        lines.push(`Session end: ${summaryMetrics.endISO}`);
+        lines.push(`Duration: ${summaryMetrics.durationSec}s`);
+        lines.push(`Distribution: Passive ${summaryMetrics.distribution.passive}%, Lecturing ${summaryMetrics.distribution.lecturing}%, Interactive ${summaryMetrics.distribution.interactive}%`);
+        lines.push(`Dominant behavior: ${summaryMetrics.dominant}`);
+        lines.push(`Avg mobility: ${summaryMetrics.avgMobility.toFixed(2)}`);
+        lines.push(`Avg orientation: ${summaryMetrics.avgOrientation.toFixed(2)}`);
+        lines.push(`Avg hand speed: ${summaryMetrics.avgHandSpeed.toFixed(2)}`);
+        lines.push(`Interactive segments: ${summaryMetrics.interactiveSegments}`);
+        lines.push('\nNotes: Model inference every 0.5s; smoothing window = none');
+        const txt = lines.join('\n');
+        const blob = new Blob([txt], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `session_summary_${summaryMetrics.startISO.replace(/[:.]/g, '-')}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const downloadSummaryJSON = () => {
+        if (!summaryMetrics) return;
+        const blob = new Blob([JSON.stringify(summaryMetrics, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `session_summary_${summaryMetrics.startISO.replace(/[:.]/g, '-')}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const startSession = () => {
+        setSessionBuffer([]);
+        setSessionStart(Date.now());
+        setSessionEnd(null);
+        setSummary(null);
+        setSessionSnapshot(null);
+        setSummaryMetrics(null);
+        setIsRecording(true);
+    };
+
+    const endSession = () => {
+        setIsRecording(false);
+        const endTs = Date.now();
+        setSessionEnd(endTs);
+
+        // Freeze snapshot
+        const snapshot = [...sessionBuffer];
+        setSessionSnapshot(snapshot);
+
+        // Generate summary metrics
+        const durationMs = (endTs - (sessionStart ?? endTs));
+        const durationSec = Math.round(durationMs / 1000);
+
+        const counts: Record<string, number> = { PASSIVE: 0, LECTURING: 0, INTERACTIVE: 0 };
+        snapshot.forEach(s => {
+            const b = s.behavior === 'INTERACTIVE' ? 'INTERACTIVE' : s.behavior === 'LECTURING' ? 'LECTURING' : 'PASSIVE';
+            counts[b] += 1;
+        });
+        const total = snapshot.length || 1;
+        const distributionPct = {
+            passive: Math.round((counts['PASSIVE'] / total) * 100),
+            lecturing: Math.round((counts['LECTURING'] / total) * 100),
+            interactive: Math.round((counts['INTERACTIVE'] / total) * 100),
+        };
+        const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Unknown';
+
+        let interactiveSegments = 0;
+        let prev = null as string | null;
+        for (const s of snapshot) {
+            if (s.behavior === 'INTERACTIVE' && prev !== 'INTERACTIVE') interactiveSegments += 1;
+            prev = s.behavior;
+        }
+
+        const avgMobility = snapshot.reduce((a, b) => a + b.mobility, 0) / total;
+        const avgOrientation = snapshot.reduce((a, b) => a + b.orientation, 0) / total;
+        const avgHandSpeed = snapshot.reduce((a, b) => a + (b.hand_speed ?? 0), 0) / total;
+
+        const metrics = {
+            startISO: new Date(sessionStart ?? endTs).toISOString(),
+            endISO: new Date(endTs).toISOString(),
+            durationSec,
+            distribution: distributionPct,
+            counts,
+            dominant,
+            avgMobility,
+            avgOrientation,
+            avgHandSpeed,
+            interactiveSegments,
+            note: 'Model inference every 0.5s; smoothing window = none',
+        };
+        setSummaryMetrics(metrics);
+
+        const summaryText = `Session start: ${metrics.startISO}\nSession end: ${metrics.endISO}\nDuration: ${Math.floor(durationSec / 60)}m ${durationSec % 60}s\nDistribution: Passive ${distributionPct.passive}%, Lecturing ${distributionPct.lecturing}%, Interactive ${distributionPct.interactive}%\nDominant behavior: ${metrics.dominant}\nAvg mobility: ${metrics.avgMobility.toFixed(2)}\nAvg orientation: ${metrics.avgOrientation.toFixed(2)}\nAvg hand speed: ${metrics.avgHandSpeed.toFixed(2)}\nInteractive segments: ${metrics.interactiveSegments}\n\nNotes: ${metrics.note}`;
+        setSummary(summaryText);
+    };
+
+    const resetSession = () => {
+        setIsRecording(false);
+        setSessionBuffer([]);
+        setSessionStart(null);
+        setSessionEnd(null);
+        setSummary(null);
+        setSessionSnapshot(null);
+        setSummaryMetrics(null);
+    };
+
+    const formatDuration = (start: number | null, end: number | null) => {
+        if (!start) return '0s';
+        const now = end ?? Date.now();
+        const s = Math.round((now - start) / 1000);
+        return `${Math.floor(s / 60)}m ${s % 60}s`;
+    };
+
+    return (
+        <div className="h-screen bg-gray-900 text-white flex flex-col">
+            <header className="flex items-center justify-between py-2 px-4 h-12 border-b border-gray-800">
+                <h1 className="text-xl font-bold">Teacher Behavior Analysis</h1>
+                <div className="flex items-center gap-2">
+                    <button className={`px-2 py-1 text-sm rounded ${isRecording ? 'bg-gray-700 text-gray-300' : 'bg-emerald-500 hover:bg-emerald-600'}`} onClick={startSession} disabled={isRecording}>Start</button>
+                    <button className={`px-2 py-1 text-sm rounded ${isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-700 text-gray-300'}`} onClick={endSession} disabled={!sessionStart || !isRecording}>End</button>
+                    <button className="px-2 py-1 text-sm rounded bg-yellow-500 hover:bg-yellow-600" onClick={resetSession}>Reset</button>
+                </div>
+            </header>
+
+            <main className="flex-1 flex flex-col overflow-hidden min-h-0">
+                <div className="p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                            <div className="flex items-center gap-2 mb-1">
+                                <Activity size={18} className="text-blue-500" />
+                                <h3 className="text-gray-400 text-sm font-medium">Current State</h3>
+                            </div>
+                            <div className={`text-2xl font-bold ${getBehaviorColor(stats.behavior)}`}>
+                                {stats.behavior}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-2">Session: {sessionStart ? formatDuration(sessionStart, isRecording ? null : sessionEnd) : 'not recording'}</div>
+                            <div className="text-xs text-gray-400">Samples: {sessionBuffer.length}</div>
+                        </div>
+                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                            <div className="flex items-center gap-2 mb-1">
+                                <Move size={18} className="text-purple-500" />
+                                <h3 className="text-gray-400 text-sm font-medium">Mobility Score</h3>
+                            </div>
+                            <div className="text-2xl font-bold">{stats.mobility}</div>
+                        </div>
+                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
+                            <div className="flex items-center gap-2 mb-1">
+                                <Compass size={18} className="text-yellow-500" />
+                                <h3 className="text-gray-400 text-sm font-medium">Orientation Var.</h3>
+                            </div>
+                            <div className="text-2xl font-bold">{stats.orientation}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex-1 flex gap-6 p-6 overflow-hidden min-h-0">
+                    <div className="flex-1 bg-gray-800 rounded-2xl overflow-hidden border border-gray-700 shadow-xl flex items-center justify-center p-4">
+                        <div className="w-full h-80 md:h-96 bg-black flex items-center justify-center rounded-lg overflow-hidden">
+                            <img src="http://localhost:8000/teacher_feed" alt="Feed" className="w-auto h-full object-contain" />
+                        </div>
+                    </div>
+
+                    <div className="w-96 flex-shrink-0">
+                        {summaryMetrics ? (
+                            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 h-full overflow-auto">
+                                <div className="flex flex-col gap-4">
+                                    <h3 className="text-lg font-semibold">Session Summary</h3>
+                                    <div className="text-sm text-gray-300">Start: <span className="text-gray-200 font-medium">{summaryMetrics.startISO}</span></div>
+                                    <div className="text-sm text-gray-300">End: <span className="text-gray-200 font-medium">{summaryMetrics.endISO}</span></div>
+                                    <div className="text-sm text-gray-300">Duration: <span className="text-gray-200 font-medium">{Math.floor(summaryMetrics.durationSec/60)}m {summaryMetrics.durationSec%60}s</span></div>
+
+                                    <div className="mt-2">
+                                        <div className="text-sm text-gray-300">Distribution</div>
+                                        <div className="grid grid-cols-1 gap-2 mt-2">
+                                            <div className="text-sm text-gray-300 flex justify-between"><span>Passive</span><span>{summaryMetrics.distribution.passive}%</span></div>
+                                            <div className="w-full bg-gray-700 rounded h-3 overflow-hidden"><div className={`h-3 bg-orange-400`} style={{ width: `${summaryMetrics.distribution.passive}%` }} /></div>
+                                            <div className="text-sm text-gray-300 flex justify-between mt-2"><span>Lecturing</span><span>{summaryMetrics.distribution.lecturing}%</span></div>
+                                            <div className="w-full bg-gray-700 rounded h-3 overflow-hidden"><div className={`h-3 bg-blue-400`} style={{ width: `${summaryMetrics.distribution.lecturing}%` }} /></div>
+                                            <div className="text-sm text-gray-300 flex justify-between mt-2"><span>Interactive</span><span>{summaryMetrics.distribution.interactive}%</span></div>
+                                            <div className="w-full bg-gray-700 rounded h-3 overflow-hidden"><div className={`h-3 bg-emerald-400`} style={{ width: `${summaryMetrics.distribution.interactive}%` }} /></div>
+                                        </div>
+                                    </div>
+
+                                    {summary && (
+                                        <div className="mt-3">
+                                            <pre className="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{summary}</pre>
+                                        </div>
+                                    )}
+
+                                    <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-gray-300">
+                                        <div>Dominant: <span className="text-gray-200 font-medium">{summaryMetrics.dominant}</span></div>
+                                        <div>Interactive segments: <span className="text-gray-200 font-medium">{summaryMetrics.interactiveSegments}</span></div>
+                                        <div>Avg mobility: <span className="text-gray-200 font-medium">{summaryMetrics.avgMobility.toFixed(2)}</span></div>
+                                        <div>Avg orientation: <span className="text-gray-200 font-medium">{summaryMetrics.avgOrientation.toFixed(2)}</span></div>
+                                        <div>Avg hand speed: <span className="text-gray-200 font-medium">{summaryMetrics.avgHandSpeed.toFixed(2)}</span></div>
+                                    </div>
+
+                                    <div className="mt-3">
+                                        <div className="text-sm text-gray-400 mb-2">Notes</div>
+                                        <div className="text-sm text-gray-300 mb-4">{summaryMetrics.note}</div>
+
+                                        <div className="flex flex-col gap-2">
+                                            <button className={`px-3 py-2 rounded bg-sky-500 hover:bg-sky-600`} onClick={downloadCSV}>Download Session CSV</button>
+                                            <button className={`px-3 py-2 rounded bg-indigo-500 hover:bg-indigo-600`} onClick={downloadSummaryTxt}>Download Summary TXT</button>
+                                            <button className={`px-3 py-2 rounded bg-zinc-500 hover:bg-zinc-600`} onClick={downloadSummaryJSON}>Download Summary JSON</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col gap-4">
+                                <DistributionCard passive={distribution.passive} lecturing={distribution.lecturing} interactive={distribution.interactive} />
+                                <TimelineStrip samples={liveWindow} />
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </main>
+        </div>
+    );
+}

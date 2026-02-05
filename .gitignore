@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+*.pkl
+!backend/modules/engagement/models/engagement_model.pkl
+.pytest_cache/
+
+# Node.js
+node_modules/
+.next/
+.npm/
+.env.local
+.env
+
+# MacOS
+.DS_Store
+
+# Large Data & Generated Files
+*.mp4
+!Classroom_Engagement_CCTV_Footage_Generation.mp4
+backend/modules/engagement/data/sample_classroom.mp4
+backend/modules/engagement/data/annotation_helper.mp4
+
+# Temp Files
+results.txt
+training_output.txt
+*.log
+
+backend/modules/performance/vector_db
