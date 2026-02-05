@@ -3,6 +3,7 @@ import sys
 import os
 import ctypes
 
+
 # Fix for Protobuf conflict (MediaPipe vs others)
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
