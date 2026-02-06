@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
-
+from modules.attendance.store import store
 from .store import store
 
 
@@ -174,3 +174,6 @@ def check_in(payload: CheckInReq):
 @router.get("/students/{student_id}/summary")
 def student_summary(student_id: str, module_code: Optional[str] = None):
     return store.student_summary(student_id=student_id, module_code=module_code)
+@router.get("/student/{student_id}/summary")
+def get_student_summary(student_id: str, module_code: str | None = None):
+    return store.student_summary(student_id, module_code)
