@@ -75,10 +75,16 @@ from modules.auth.seeder import seed_users
 
 # Create DB tables
 Base.metadata.create_all(bind=engine)
-
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title="EduMonitor Backend", description="Classroom engagement and AI-powered lecture assistant")
 
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Startup event to check dependencies
 @app.on_event("startup")
 async def startup_event():

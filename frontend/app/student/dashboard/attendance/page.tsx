@@ -7,12 +7,13 @@ import { ArrowLeft, UserCheck, BarChart3 } from "lucide-react";
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 type MarkRes = {
-  ok: boolean;
-  message: string;
-  module_code?: string;
-  module_name?: string;
-  marked_at?: string;
-  remaining_slots?: number;
+  session_id: string;
+  module_code: string;
+  module_name: string;
+  remaining_slots: number;
+  pin_expires_at: string;
+
+
   // optional if backend returns it later
   max_students?: number;
 };
@@ -40,7 +41,8 @@ export default function StudentAttendancePage() {
       if (!studentId.trim()) throw new Error("Student ID is required");
       if (!/^\d{6}$/.test(pin.trim())) throw new Error("PIN must be 6 digits");
 
-      const res = await fetch(`${API}/api/attendance/mark`, {
+      const res = await fetch(`${API}/api/attendance/checkin`, {
+
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -51,12 +53,13 @@ export default function StudentAttendancePage() {
 
       const json = (await res.json()) as MarkRes;
 
-      if (!res.ok || !json.ok) {
-        throw new Error((json as any)?.message || "Failed to mark attendance");
-      }
+      if (!res.ok) {
+  throw new Error("Failed to mark attendance");
+}
+
 
       setSuccess(true);
-      setMsg(json.message || "Attendance marked!");
+      setMsg(`Attendance marked for ${json.module_code}`);
       setData(json);
       setPin("");
 

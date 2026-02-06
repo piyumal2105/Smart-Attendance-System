@@ -12,8 +12,10 @@ def _now_utc() -> datetime:
 
 
 def _gen_pin() -> str:
-    # 6-digit PIN
-    return f"{secrets.randbelow(1_000_000):06d}"
+    # 6-digit PIN (guaranteed to be exactly 6 characters with leading zeros)
+    pin = f"{secrets.randbelow(1_000_000):06d}"
+    assert len(pin) == 6, f"PIN must be 6 characters, got {len(pin)}"
+    return pin
 
 
 @dataclass
@@ -125,6 +127,11 @@ class InMemoryAttendanceStore:
         selfie_base64: Optional[str] = None,
     ) -> LectureSession:
         with self._lock:
+            # Ensure PIN is exactly 6 characters
+            pin = str(pin).strip()
+            if len(pin) != 6:
+                raise ValueError("INVALID_PIN")
+            
             # Find the active session by PIN
             sess = next((s for s in self._sessions.values() if s.pin == pin), None)
             if not sess:
