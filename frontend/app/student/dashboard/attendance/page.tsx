@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, UserCheck, BarChart3 } from "lucide-react";
+import { ArrowLeft, UserCheck, BarChart3, Calendar } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -17,6 +17,14 @@ type MarkRes = {
   max_students?: number;
 };
 
+type ModuleAttendance = {
+  module_code: string;
+  module_name: string;
+  total_sessions: number;
+  present_sessions: number;
+  attendance_percentage: number;
+};
+
 export default function StudentAttendancePage() {
   const { user } = useAuth();
   const [studentId, setStudentId] = useState("");
@@ -27,7 +35,11 @@ export default function StudentAttendancePage() {
   const [success, setSuccess] = useState(false);
   const [data, setData] = useState<MarkRes | null>(null);
 
-  // Local demo history (replace with real data from API later)
+  // Module attendance history - ONLY modules where student was present
+  const [moduleAttendance, setModuleAttendance] = useState<ModuleAttendance[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Local demo history
   const [history, setHistory] = useState<
     { module_code: string; module_name: string; marked_at: string }[]
   >([]);
@@ -38,6 +50,82 @@ export default function StudentAttendancePage() {
       setStudentId(user.student_profile.student_id);
     }
   }, [user]);
+
+  // Fetch module attendance history when studentId is available
+  useEffect(() => {
+    if (studentId) {
+      fetchModuleAttendance();
+    }
+  }, [studentId]);
+
+  async function fetchModuleAttendance() {
+    if (!studentId.trim()) return;
+
+    setLoadingHistory(true);
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) return;
+
+      const res = await fetch(`${API}/api/attendance/student/${studentId}/summary`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        console.error("Failed to fetch module attendance");
+        return;
+      }
+
+      const json = await res.json();
+
+      // Group records by module - ONLY count sessions where student was PRESENT
+      const moduleMap = new Map<string, {
+        module_code: string;
+        module_name: string;
+        total: number;
+        present: number;
+      }>();
+
+      for (const record of json.records || []) {
+        // Only process records where student was present
+        if (!record.present) continue;
+
+        const key = record.module_code;
+        const existing = moduleMap.get(key);
+
+        if (!existing) {
+          moduleMap.set(key, {
+            module_code: record.module_code,
+            module_name: record.module_name,
+            total: 1,
+            present: 1,
+          });
+        } else {
+          existing.total += 1;
+          existing.present += 1;
+        }
+      }
+
+      // Convert to array - only modules where student attended at least once
+      const modules: ModuleAttendance[] = Array.from(moduleMap.values())
+        .filter(m => m.present > 0) // Only show modules where student was present
+        .map(m => ({
+          module_code: m.module_code,
+          module_name: m.module_name,
+          total_sessions: m.total,
+          present_sessions: m.present,
+          attendance_percentage: 100, // Since we only count present sessions, it's always 100%
+        }))
+        .sort((a, b) => b.total_sessions - a.total_sessions); // Sort by number of sessions attended
+
+      setModuleAttendance(modules);
+    } catch (err) {
+      console.error("Error fetching module attendance:", err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
 
   async function submitAttendance() {
     setLoading(true);
@@ -51,7 +139,7 @@ export default function StudentAttendancePage() {
       const token = localStorage.getItem("token");
       if (!token) throw new Error("No authentication token found. Please log in again.");
 
-      const res = await fetch("http://localhost:8000/api/attendance/checkin", {
+      const res = await fetch(`${API}/api/attendance/checkin`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -65,7 +153,7 @@ export default function StudentAttendancePage() {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || "Failed to mark attendance");
+        throw new Error(errorData.message || errorData.detail || "Failed to mark attendance");
       }
 
       const json = (await res.json()) as MarkRes;
@@ -75,7 +163,7 @@ export default function StudentAttendancePage() {
       setData(json);
       setPin("");
 
-      // Add to local history (temporary until you fetch real history from backend)
+      // Add to local history
       if (json.module_code && json.module_name) {
         setHistory((prev) => [
           {
@@ -86,6 +174,9 @@ export default function StudentAttendancePage() {
           ...prev,
         ]);
       }
+
+      // Refresh module attendance after successful check-in
+      setTimeout(() => fetchModuleAttendance(), 1000);
     } catch (err: any) {
       setSuccess(false);
       setMsg(err?.message || "Something went wrong. Please try again.");
@@ -164,8 +255,8 @@ export default function StudentAttendancePage() {
         {msg && (
           <div
             className={`mb-6 rounded-lg border px-4 py-3 text-sm ${success
-              ? "border-emerald-700/30 bg-emerald-950/50 text-emerald-300"
-              : "border-red-700/30 bg-red-950/50 text-red-300"
+                ? "border-emerald-700/30 bg-emerald-950/50 text-emerald-300"
+                : "border-red-700/30 bg-red-950/50 text-red-300"
               }`}
           >
             {msg}
@@ -293,7 +384,7 @@ export default function StudentAttendancePage() {
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
             <div className="text-sm text-gray-400">Attendance Records</div>
             <div className="mt-2 text-3xl font-bold text-white">{history.length}</div>
-            <div className="text-sm text-gray-500 mt-1">Local (demo mode)</div>
+            <div className="text-sm text-gray-500 mt-1">This session</div>
           </div>
 
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
@@ -304,19 +395,77 @@ export default function StudentAttendancePage() {
             <div className="text-sm text-gray-500 mt-1">Current session</div>
           </div>
 
-          {/* Attendance by Module Chart */}
+          {/* Module Attendance Overview - ONLY MODULES STUDENT ATTENDED */}
+          <div className="lg:col-span-3 bg-gray-800 rounded-xl border border-gray-700 p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-semibold text-gray-200 flex items-center gap-2">
+                <Calendar size={18} className="text-gray-400" />
+                My Module Attendance
+              </h2>
+              <button
+                onClick={fetchModuleAttendance}
+                disabled={loadingHistory}
+                className="text-xs text-gray-400 hover:text-gray-200 flex items-center gap-1 disabled:opacity-50"
+              >
+                {loadingHistory ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            {loadingHistory ? (
+              <div className="text-sm text-gray-500 py-6 text-center">
+                Loading attendance history...
+              </div>
+            ) : moduleAttendance.length === 0 ? (
+              <div className="text-sm text-gray-500 py-6 text-center">
+                No attendance records found. Mark attendance to see your progress.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {moduleAttendance.map((m) => (
+                  <div key={m.module_code} className="bg-gray-700/40 rounded-lg p-4">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <div className="font-medium text-gray-200">
+                          {m.module_code}
+                        </div>
+                        <div className="text-sm text-gray-400 mt-0.5">
+                          {m.module_name}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-bold text-white">
+                          {m.attendance_percentage}%
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          {m.present_sessions}/{m.total_sessions} sessions
+                        </div>
+                      </div>
+                    </div>
+                    <div className="h-3 rounded-full bg-gray-700 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 transition-all duration-400"
+                        style={{ width: `${m.attendance_percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Attendance by Module Chart (session-based) */}
           <div className="lg:col-span-3 bg-gray-800 rounded-xl border border-gray-700 p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="font-semibold text-gray-200 flex items-center gap-2">
                 <BarChart3 size={18} className="text-gray-400" />
-                Attendance by Module
+                Session Activity
               </h2>
-              <div className="text-xs text-gray-500">Local demo data</div>
+              <div className="text-xs text-gray-500">Current session records</div>
             </div>
 
             {moduleStats.length === 0 ? (
               <div className="text-sm text-gray-500 py-6 text-center">
-                No attendance records yet. Mark once to see stats.
+                No session activity yet. Mark once to see stats.
               </div>
             ) : (
               <div className="space-y-4">
