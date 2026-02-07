@@ -34,14 +34,18 @@ type SessionRes = {
   regen_left: number;
 };
 
+type AttendanceItem = {
+  student_id: string;
+  student_name?: string;
+  full_name?: string;
+  profile_picture_url?: string;
+  selfie_base64?: string;
+  marked_at: string;
+};
+
 type SessionDetailRes = SessionRes & {
   attendance_count: number;
-  attendance: {
-    student_id: string;
-    student_name?: string;
-    selfie_base64?: string;
-    marked_at: string;
-  }[];
+  attendance: AttendanceItem[];
 };
 
 /** ---------------- Page ---------------- */
@@ -104,12 +108,14 @@ export default function AttendancePage() {
     console.log(`[loadDetail] Fetching session: ${sessionId}`);
 
     try {
+      const token = localStorage.getItem("token");
       const url = `${API}/api/attendance/sessions/${sessionId}`;
 
       const res = await fetch(url, {
         cache: "no-store",
         headers: {
           Accept: "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
         },
       });
 
@@ -214,9 +220,13 @@ export default function AttendancePage() {
     setMsg(null);
 
     try {
+      const token = localStorage.getItem("token");
       const res = await fetch(`${API}/api/attendance/sessions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
         body: JSON.stringify({
           module_code: moduleCode,
           module_name: moduleName,
@@ -266,11 +276,15 @@ export default function AttendancePage() {
     if (!session?.session_id) return;
 
     try {
+      const token = localStorage.getItem("token");
       const res = await fetch(
         `${API}/api/attendance/sessions/${session.session_id}/regenerate-pin`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(token && { Authorization: `Bearer ${token}` }),
+          },
           body: JSON.stringify({ expiry_minutes: expiryMinutes }),
         }
       );
@@ -303,23 +317,21 @@ export default function AttendancePage() {
   }, [session]);
 
   const presentMap = useMemo(() => {
-    const map = new Map<string, { marked_at: string; selfie_base64?: string }>();
+    const map = new Map<string, AttendanceItem>();
     detail?.attendance?.forEach((a) => {
-      map.set(a.student_id, {
-        marked_at: a.marked_at,
-        selfie_base64: a.selfie_base64,
-      });
+      map.set(a.student_id, a);
     });
     return map;
   }, [detail]);
 
   const presentCount = detail?.attendance_count ?? 0;
 
-  // Only students who have actually attended (no hardcoded roster)
+  // Only students who have actually attended
   const attendedStudents = useMemo(() => {
     return detail?.attendance?.map((a) => ({
       student_id: a.student_id,
-      student_name: a.student_name || a.student_id,
+      student_name: a.full_name || a.student_name || a.student_id,
+      profile_picture_url: a.profile_picture_url,
     })) ?? [];
   }, [detail]);
 
@@ -381,6 +393,14 @@ export default function AttendancePage() {
     }
   }
 
+  // Helper to get profile picture URL
+  const getProfilePictureUrl = (attendance: AttendanceItem) => {
+    if (attendance.profile_picture_url) {
+      return `${API}${attendance.profile_picture_url}`;
+    }
+    return null;
+  };
+
   // ────────────────────────────────────────────────
   // JSX
   // ────────────────────────────────────────────────
@@ -395,8 +415,6 @@ export default function AttendancePage() {
       </header>
 
       <main className="flex-1 overflow-auto p-8">
-        
-
         <div className="mb-6 flex flex-col gap-3">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="text-sm text-gray-400">
@@ -457,8 +475,8 @@ export default function AttendancePage() {
           {msg && (
             <div
               className={`rounded-lg border px-4 py-3 text-sm ${msg.includes("✅")
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                  : "border-red-500/40 bg-red-500/10 text-red-200"
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                : "border-red-500/40 bg-red-500/10 text-red-200"
                 }`}
             >
               {msg}
@@ -705,6 +723,7 @@ export default function AttendancePage() {
                     </button>
                   </div>
 
+                  {/* Live Check-ins with Profile Pictures */}
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <div className="font-semibold">Live Check-ins ({presentCount})</div>
@@ -736,26 +755,39 @@ export default function AttendancePage() {
                         </thead>
                         <tbody>
                           {detail?.attendance?.length ? (
-                            detail.attendance.map((a) => (
-                              <tr key={a.student_id} className="border-b border-white/5 hover:bg-white/5">
-                                <td className="py-2 px-2">
-                                  {a.selfie_base64 ? (
-                                    <img
-                                      src={a.selfie_base64}
-                                      alt="selfie"
-                                      className="h-10 w-10 rounded-full object-cover border border-gray-700"
-                                    />
-                                  ) : (
-                                    <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400">
-                                      ?
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="py-2 px-2">{a.student_id}</td>
-                                <td className="py-2 px-2">{a.student_name || "-"}</td>
-                                <td className="py-2 px-2">{formatDT(a.marked_at)}</td>
-                              </tr>
-                            ))
+                            detail.attendance.map((a) => {
+                              const profilePicUrl = getProfilePictureUrl(a);
+                              return (
+                                <tr key={a.student_id} className="border-b border-white/5 hover:bg-white/5">
+                                  <td className="py-2 px-2">
+                                    {profilePicUrl ? (
+                                      <img
+                                        src={profilePicUrl}
+                                        alt={a.full_name || a.student_id}
+                                        className="h-10 w-10 rounded-full object-cover border border-gray-700"
+                                        onError={(e) => {
+                                          // Fallback to placeholder on error
+                                          (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40?text=?';
+                                        }}
+                                      />
+                                    ) : a.selfie_base64 ? (
+                                      <img
+                                        src={a.selfie_base64}
+                                        alt="selfie"
+                                        className="h-10 w-10 rounded-full object-cover border border-gray-700"
+                                      />
+                                    ) : (
+                                      <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
+                                        {(a.full_name || a.student_id).charAt(0).toUpperCase()}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-2">{a.student_id}</td>
+                                  <td className="py-2 px-2">{a.full_name || a.student_name || "-"}</td>
+                                  <td className="py-2 px-2">{formatDT(a.marked_at)}</td>
+                                </tr>
+                              );
+                            })
                           ) : (
                             <tr>
                               <td colSpan={4} className="py-8 text-center text-gray-500">
@@ -771,7 +803,7 @@ export default function AttendancePage() {
               )}
             </div>
 
-            {/* Student Attendance Lookup – now only shows real attended students */}
+            {/* Student Attendance Lookup – with profile pictures */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="mb-4 flex items-center justify-between gap-4 flex-wrap">
                 <h2 className="text-lg font-semibold">Student Attendance Lookup</h2>
@@ -791,6 +823,7 @@ export default function AttendancePage() {
                 <table className="w-full text-left text-sm">
                   <thead className="text-gray-300 sticky top-0 bg-gray-900 z-10">
                     <tr className="border-b border-gray-700">
+                      <th className="py-3 px-4">Photo</th>
                       <th className="py-3 px-4">Student</th>
                       <th className="py-3 px-4">ID</th>
                       <th className="py-3 px-4">Status</th>
@@ -802,8 +835,26 @@ export default function AttendancePage() {
                       filteredStudents.length > 0 ? (
                         filteredStudents.map((s) => {
                           const entry = presentMap.get(s.student_id);
+                          const profilePicUrl = s.profile_picture_url ? `${API}${s.profile_picture_url}` : null;
+
                           return (
                             <tr key={s.student_id} className="border-b border-gray-800 hover:bg-gray-800/50">
+                              <td className="py-3 px-4">
+                                {profilePicUrl ? (
+                                  <img
+                                    src={profilePicUrl}
+                                    alt={s.student_name}
+                                    className="h-10 w-10 rounded-full object-cover border border-gray-700"
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40?text=?';
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
+                                    {s.student_name.charAt(0).toUpperCase()}
+                                  </div>
+                                )}
+                              </td>
                               <td className="py-3 px-4 font-medium">{s.student_name}</td>
                               <td className="py-3 px-4">{s.student_id}</td>
                               <td className="py-3 px-4">
@@ -819,14 +870,14 @@ export default function AttendancePage() {
                         })
                       ) : (
                         <tr>
-                          <td colSpan={4} className="py-16 text-center text-gray-500">
+                          <td colSpan={5} className="py-16 text-center text-gray-500">
                             No students have checked in yet
                           </td>
                         </tr>
                       )
                     ) : (
                       <tr>
-                        <td colSpan={4} className="py-16 text-center text-gray-500">
+                        <td colSpan={5} className="py-16 text-center text-gray-500">
                           Create a session to view attendance
                         </td>
                       </tr>
