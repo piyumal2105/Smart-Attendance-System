@@ -98,7 +98,21 @@ class CheckInReq(BaseModel):
     pin: str = Field(min_length=6, max_length=6)
     student_id: str
     student_name: Optional[str] = None
-    selfie_base64: Optional[str] = None  # optional
+    selfie_base64: Optional[str] = None  # required for face verification
+    profile_picture_base64: Optional[str] = None  # required for face verification
+    skip_face_verification: bool = False  # for testing/fallback
+
+
+class FaceVerifyReq(BaseModel):
+    profile_picture_base64: str
+    selfie_base64: str
+
+
+class FaceVerifyRes(BaseModel):
+    is_match: bool
+    message: str
+    confidence: Optional[float] = None
+    distance: Optional[float] = None
 
 
 # ----------- Helpers -----------
@@ -185,6 +199,41 @@ def get_session(session_id: str):
     return _session_to_detail_res(sess)
 
 
+@router.post("/verify-face", response_model=FaceVerifyRes)
+async def verify_face(payload: FaceVerifyReq):
+    """
+    Standalone endpoint to verify if a selfie matches a profile picture
+    Used for pre-validation before check-in
+    """
+    try:
+        from modules.attendance.face_recognition_utils import verify_face_from_base64
+        
+        is_match, message, distance = verify_face_from_base64(
+            profile_picture_base64=payload.profile_picture_base64,
+            selfie_base64=payload.selfie_base64,
+            tolerance=0.6
+        )
+        
+        confidence = None
+        if distance is not None:
+            confidence = round((1 - distance) * 100, 2)
+        
+        return FaceVerifyRes(
+            is_match=is_match,
+            message=message,
+            confidence=confidence,
+            distance=distance
+        )
+    
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="Face recognition library not installed. Please install face_recognition."
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Face verification error: {str(e)}")
+
+
 @router.post("/checkin", response_model=SessionDetailRes)
 async def check_in(payload: CheckInReq):
     try:
@@ -193,6 +242,8 @@ async def check_in(payload: CheckInReq):
             student_id=payload.student_id,
             student_name=payload.student_name,
             selfie_base64=payload.selfie_base64,
+            profile_picture_base64=payload.profile_picture_base64,
+            skip_face_verification=payload.skip_face_verification,
         )
         print(f"[CHECKIN] Student {payload.student_id} marked in session {sess.session_id}")
         print(f"[CHECKIN] Current attendance count: {len(sess.attendance)}")
@@ -203,12 +254,21 @@ async def check_in(payload: CheckInReq):
         return _session_to_detail_res(sess)
     except ValueError as e:
         code = str(e)
+        
+        # Handle face verification errors
+        if code.startswith("FACE_MISMATCH:"):
+            message = code.split(":", 1)[1]
+            raise HTTPException(status_code=400, detail=message)
+        
         if code == "INVALID_PIN":
             raise HTTPException(status_code=400, detail="Invalid PIN")
         if code == "PIN_EXPIRED":
             raise HTTPException(status_code=400, detail="PIN expired")
         if code == "SESSION_FULL":
             raise HTTPException(status_code=400, detail="No remaining slots")
+        if code == "PROFILE_PICTURE_REQUIRED":
+            raise HTTPException(status_code=400, detail="Profile picture is required for face verification")
+        
         raise HTTPException(status_code=400, detail="Check-in failed")
 
 

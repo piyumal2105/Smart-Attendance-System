@@ -125,6 +125,8 @@ class InMemoryAttendanceStore:
         student_id: str,
         student_name: Optional[str] = None,
         selfie_base64: Optional[str] = None,
+        profile_picture_base64: Optional[str] = None,
+        skip_face_verification: bool = False,
     ) -> LectureSession:
         with self._lock:
             # Ensure PIN is exactly 6 characters
@@ -146,6 +148,35 @@ class InMemoryAttendanceStore:
 
             if sess.remaining_slots <= 0:
                 raise ValueError("SESSION_FULL")
+
+            # Face verification (if selfie is provided and not skipped)
+            if selfie_base64 and not skip_face_verification:
+                if not profile_picture_base64:
+                    raise ValueError("PROFILE_PICTURE_REQUIRED")
+                
+                try:
+                    from modules.attendance.face_recognition_utils import verify_face_from_base64
+                    
+                    is_match, message, distance = verify_face_from_base64(
+                        profile_picture_base64=profile_picture_base64,
+                        selfie_base64=selfie_base64,
+                        tolerance=0.6  # Can be adjusted for stricter/looser matching
+                    )
+                    
+                    if not is_match:
+                        raise ValueError(f"FACE_MISMATCH:{message}")
+                    
+                    print(f"[FACE VERIFICATION] ✅ {message}")
+                    
+                except ImportError:
+                    print("[FACE VERIFICATION] ⚠️ face_recognition library not available, skipping verification")
+                except ValueError as ve:
+                    # Re-raise face verification errors
+                    raise ve
+                except Exception as e:
+                    print(f"[FACE VERIFICATION] ⚠️ Error: {e}")
+                    # Continue without face verification if there's an unexpected error
+                    pass
 
             sess.attendance[student_id] = AttendanceEntry(
                 student_id=student_id,

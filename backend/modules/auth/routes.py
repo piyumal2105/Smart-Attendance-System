@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import timedelta
 from typing import List
+import base64
 from database import get_db
 from . import models, schemas, utils, dependencies
 
@@ -125,6 +126,10 @@ async def register_teacher(
 
 @router.get("/users/{user_id}/profile-picture")
 def get_profile_picture(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get user's profile picture as image
+    Returns the binary image data
+    """
     # Check student profile
     student_profile = db.query(models.StudentProfile).filter(models.StudentProfile.user_id == user_id).first()
     if student_profile and student_profile.profile_picture:
@@ -137,6 +142,68 @@ def get_profile_picture(user_id: int, db: Session = Depends(get_db)):
     
     # Return a default placeholder or 404
     raise HTTPException(status_code=404, detail="Profile picture not found")
+
+
+@router.get("/users/{user_id}/profile-picture-base64")
+async def get_profile_picture_base64(
+    user_id: int,
+    current_user: models.User = Depends(dependencies.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get user's profile picture as base64 encoded string for face verification
+    
+    Security: Only allows users to get their own profile picture OR
+    allows teachers/admins to get any profile picture (for attendance verification)
+    """
+    # Check if user is requesting their own profile OR is a teacher/admin
+    if current_user.id != user_id and current_user.role not in [models.UserRole.TEACHER, models.UserRole.ADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this profile picture"
+        )
+    
+    # Get profile picture from database
+    profile_picture_data = None
+    
+    # Check student profile
+    student_profile = db.query(models.StudentProfile).filter(
+        models.StudentProfile.user_id == user_id
+    ).first()
+    
+    if student_profile and student_profile.profile_picture:
+        profile_picture_data = student_profile.profile_picture
+    else:
+        # Check teacher profile
+        teacher_profile = db.query(models.TeacherProfile).filter(
+            models.TeacherProfile.user_id == user_id
+        ).first()
+        
+        if teacher_profile and teacher_profile.profile_picture:
+            profile_picture_data = teacher_profile.profile_picture
+    
+    if not profile_picture_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No profile picture found for this user"
+        )
+    
+    try:
+        # Convert binary data to base64
+        image_base64 = base64.b64encode(profile_picture_data).decode('utf-8')
+        
+        # Return as data URI for easy use in frontend
+        return {
+            "user_id": user_id,
+            "profile_picture_base64": f"data:image/jpeg;base64,{image_base64}"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to encode profile picture: {str(e)}"
+        )
+
 
 @router.post("/token", response_model=schemas.Token)
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -153,12 +220,6 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
     ).first()
     
     if not user or not utils.verify_password(form_data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
