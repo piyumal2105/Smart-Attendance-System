@@ -155,7 +155,7 @@ class InMemoryAttendanceStore:
                     raise ValueError("PROFILE_PICTURE_REQUIRED")
                 
                 try:
-                    from modules.attendance.face_recognition_utils import verify_face_from_base64
+                    from models.attendance.face_recognition_utils import verify_face_from_base64
                     
                     is_match, message, distance = verify_face_from_base64(
                         profile_picture_base64=profile_picture_base64,

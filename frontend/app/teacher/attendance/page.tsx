@@ -11,6 +11,10 @@ import {
   Clock,
   RefreshCw,
   CalendarClock,
+  MapPin,
+  Maximize2,
+  Minimize2,
+  ShieldCheck,
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -50,12 +54,9 @@ type SessionDetailRes = SessionRes & {
 
 /** ---------------- Page ---------------- */
 export default function AttendancePage() {
-  // ── Debug mount/unmount ────────────────────────────────────────
   useEffect(() => {
     console.log("=== TEACHER ATTENDANCE PAGE MOUNTED ===");
-    return () => {
-      console.log("=== TEACHER ATTENDANCE PAGE UNMOUNTED ===");
-    };
+    return () => console.log("=== TEACHER ATTENDANCE PAGE UNMOUNTED ===");
   }, []);
 
   const [moduleCode, setModuleCode] = useState("IT3071");
@@ -101,65 +102,46 @@ export default function AttendancePage() {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
+
   // ────────────────────────────────────────────────
-  // Load Detail Function
+  // Load Detail
   // ────────────────────────────────────────────────
   const loadDetail = useCallback(async (sessionId: string) => {
-    console.log(`[loadDetail] Fetching session: ${sessionId}`);
-
     try {
       const token = localStorage.getItem("token");
-      const url = `${API}/api/attendance/sessions/${sessionId}`;
-
-      const res = await fetch(url, {
+      const res = await fetch(`${API}/api/attendance/sessions/${sessionId}`, {
         cache: "no-store",
         headers: {
           Accept: "application/json",
           ...(token && { Authorization: `Bearer ${token}` }),
         },
       });
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = (await res.json()) as SessionDetailRes;
-      console.log(`[loadDetail] ✅ SUCCESS - Count: ${data.attendance_count}`);
-
       setDetail(data);
       setSession(data);
 
       const count = Number(data.attendance_count ?? 0);
       if (count !== lastCountRef.current) {
-        console.log(`[loadDetail] 📊 Count changed: ${lastCountRef.current} → ${count}`);
         lastCountRef.current = count;
         setLiveCounts((prev) => [...prev, count].slice(-12));
       }
     } catch (err: any) {
-      // console.error("[loadDetail] ❌ FAILED:", err.message);
+      // silent
     }
   }, []);
 
   // ────────────────────────────────────────────────
-  // WebSocket for Real-Time Updates
+  // WebSocket
   // ────────────────────────────────────────────────
   useEffect(() => {
     if (!activeSessionId) return;
-
     const wsUrl = API.replace("http", "ws") + `/api/attendance/ws/${activeSessionId}`;
     const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => console.log("[WS] Connected");
-    ws.onmessage = (event) => {
-      if (event.data === "update" && activeSessionId) {
-        loadDetail(activeSessionId);
-      }
-    };
-    ws.onclose = () => console.log("[WS] Closed");
-    ws.onerror = (err) => console.error("[WS] Error:", err);
-
+    ws.onmessage = (e) => { if (e.data === "update" && activeSessionId) loadDetail(activeSessionId); };
     wsRef.current = ws;
-
     return () => ws.close();
   }, [activeSessionId, loadDetail]);
 
@@ -167,37 +149,21 @@ export default function AttendancePage() {
   // Polling
   // ────────────────────────────────────────────────
   const startPolling = useCallback((sessionId: string) => {
-    if (!sessionId) return;
-
-    console.log(`[POLLING] 🟢 Starting for session: ${sessionId}`);
-
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-    }
-
-    loadDetail(sessionId); // immediate
-    pollingIntervalRef.current = setInterval(() => {
-      loadDetail(sessionId);
-    }, 3000);
+    if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    loadDetail(sessionId);
+    pollingIntervalRef.current = setInterval(() => loadDetail(sessionId), 3000);
   }, [loadDetail]);
 
   const stopPolling = useCallback(() => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-      console.log("[POLLING] 🔴 Stopped");
-    }
+    if (pollingIntervalRef.current) { clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; }
   }, []);
 
-  useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
-  // ── Recover active session ───────────────────────
+  // Recover active session
   useEffect(() => {
     const savedId = localStorage.getItem("activeAttendanceSessionId");
     if (savedId && !activeSessionId) {
-      console.log("♻️ Restoring session:", savedId);
       setActiveSessionId(savedId);
       loadDetail(savedId);
       startPolling(savedId);
@@ -205,11 +171,8 @@ export default function AttendancePage() {
   }, [loadDetail, startPolling, activeSessionId]);
 
   useEffect(() => {
-    if (activeSessionId) {
-      localStorage.setItem("activeAttendanceSessionId", activeSessionId);
-    } else {
-      localStorage.removeItem("activeAttendanceSessionId");
-    }
+    if (activeSessionId) localStorage.setItem("activeAttendanceSessionId", activeSessionId);
+    else localStorage.removeItem("activeAttendanceSessionId");
   }, [activeSessionId]);
 
   // ────────────────────────────────────────────────
@@ -218,48 +181,25 @@ export default function AttendancePage() {
   async function createSession() {
     setLoading(true);
     setMsg(null);
-
     try {
       const token = localStorage.getItem("token");
       const res = await fetch(`${API}/api/attendance/sessions`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token && { Authorization: `Bearer ${token}` }),
-        },
+        headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }) },
         body: JSON.stringify({
-          module_code: moduleCode,
-          module_name: moduleName,
-          year,
-          faculty,
-          batch,
-          start_time: startTime || "now",
-          end_time: endTime || "later",
-          hours,
-          location,
-          max_students: maxStudents,
-          expiry_minutes: expiryMinutes,
-          regen_limit: regenLimit,
+          module_code: moduleCode, module_name: moduleName, year, faculty, batch,
+          start_time: startTime || "now", end_time: endTime || "later", hours,
+          location, max_students: maxStudents, expiry_minutes: expiryMinutes, regen_limit: regenLimit,
         }),
       });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.detail || `HTTP ${res.status}`);
-      }
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || `HTTP ${res.status}`); }
 
       const data = (await res.json()) as SessionRes;
       setActiveSessionId(data.session_id);
       setSession(data);
       setDetail(null);
-
-      setSavedSessions((prev) => {
-        if (prev.some((s) => s.session_id === data.session_id)) return prev;
-        return [data, ...prev].slice(0, 8);
-      });
-
+      setSavedSessions((prev) => prev.some((s) => s.session_id === data.session_id) ? prev : [data, ...prev].slice(0, 8));
       startPolling(data.session_id);
-
       setMsg(`✅ Session created! PIN: ${data.pin}`);
       setTimeout(() => setMsg(null), 7000);
     } catch (err: any) {
@@ -274,32 +214,17 @@ export default function AttendancePage() {
   // ────────────────────────────────────────────────
   async function regeneratePin() {
     if (!session?.session_id) return;
-
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch(
-        `${API}/api/attendance/sessions/${session.session_id}/regenerate-pin`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token && { Authorization: `Bearer ${token}` }),
-          },
-          body: JSON.stringify({ expiry_minutes: expiryMinutes }),
-        }
-      );
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Failed to regenerate PIN");
-      }
-
+      const res = await fetch(`${API}/api/attendance/sessions/${session.session_id}/regenerate-pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }) },
+        body: JSON.stringify({ expiry_minutes: expiryMinutes }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Failed"); }
       const data = (await res.json()) as SessionRes;
       setSession(data);
-      setSavedSessions((prev) =>
-        prev.map((s) => (s.session_id === data.session_id ? data : s))
-      );
-
+      setSavedSessions((prev) => prev.map((s) => s.session_id === data.session_id ? data : s));
       setMsg(`✅ PIN regenerated! New PIN: ${data.pin}`);
       setTimeout(() => setMsg(null), 5000);
     } catch (err: any) {
@@ -312,70 +237,80 @@ export default function AttendancePage() {
   // ────────────────────────────────────────────────
   const expiresIn = useMemo(() => {
     if (!session) return null;
-    const exp = new Date(session.pin_expires_at).getTime();
-    return Math.max(0, Math.ceil((exp - Date.now()) / 1000));
+    return Math.max(0, Math.ceil((new Date(session.pin_expires_at).getTime() - Date.now()) / 1000));
   }, [session]);
 
   const presentMap = useMemo(() => {
     const map = new Map<string, AttendanceItem>();
-    detail?.attendance?.forEach((a) => {
-      map.set(a.student_id, a);
-    });
+    detail?.attendance?.forEach((a) => map.set(a.student_id, a));
     return map;
   }, [detail]);
 
   const presentCount = detail?.attendance_count ?? 0;
 
-  // Only students who have actually attended
-  const attendedStudents = useMemo(() => {
-    return detail?.attendance?.map((a) => ({
+  const attendedStudents = useMemo(() =>
+    detail?.attendance?.map((a) => ({
       student_id: a.student_id,
       student_name: a.full_name || a.student_name || a.student_id,
       profile_picture_url: a.profile_picture_url,
-    })) ?? [];
-  }, [detail]);
+      selfie_base64: a.selfie_base64,
+    })) ?? [], [detail]);
 
   const filteredStudents = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return attendedStudents;
     return attendedStudents.filter(
-      (s) =>
-        s.student_id.toLowerCase().includes(q) ||
-        s.student_name.toLowerCase().includes(q)
+      (s) => s.student_id.toLowerCase().includes(q) || s.student_name.toLowerCase().includes(q)
     );
   }, [attendedStudents, search]);
 
-  function exportCSV() {
-    if (!session || !detail) {
-      setMsg("No active session to export");
-      return;
-    }
+  // ────────────────────────────────────────────────
+  // Helpers
+  // ────────────────────────────────────────────────
+  const getProfilePictureUrl = (a: AttendanceItem) =>
+    a.profile_picture_url ? `${API}${a.profile_picture_url}` : null;
 
+  function formatDT(dt: string) {
+    try { return new Date(dt).toLocaleString(); } catch { return dt; }
+  }
+
+  // ────────────────────────────────────────────────
+  // Classroom Seating Map
+  // ────────────────────────────────────────────────
+  const classroomSeats = useMemo(() => {
+    const rows = 6;
+    const cols = 10;
+    const totalSeats = session?.max_students ?? maxStudents;
+    const seats = [];
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const seatIndex = row * cols + col;
+        if (seatIndex < totalSeats) {
+          const student = attendedStudents[seatIndex] || null;
+          const isPresent = student ? presentMap.has(student.student_id) : false;
+          seats.push({ row, col, seatIndex, student, isPresent, isEmpty: !student });
+        }
+      }
+    }
+    return seats;
+  }, [session, maxStudents, attendedStudents, presentMap]);
+
+  function exportCSV() {
+    if (!session || !detail) { setMsg("No active session to export"); return; }
     const rows = attendedStudents.map((s) => {
       const entry = presentMap.get(s.student_id);
       return {
-        student_id: s.student_id,
-        student_name: s.student_name,
-        status: "PRESENT",
-        marked_at: formatDT(entry?.marked_at || ""),
-        module_code: session.module_code,
-        module_name: session.module_name,
-        batch: session.batch,
-        faculty: session.faculty,
-        year: session.year,
+        student_id: s.student_id, student_name: s.student_name, status: "PRESENT",
+        marked_at: formatDT(entry?.marked_at || ""), module_code: session.module_code,
+        module_name: session.module_name, batch: session.batch, faculty: session.faculty, year: session.year,
       };
     });
-
     const headers = Object.keys(rows[0] || {});
     const csv = [
       headers.join(","),
-      ...rows.map((row) =>
-        headers
-          .map((h) => `"${String((row as any)[h] ?? "").replace(/"/g, '""')}"`)
-          .join(",")
-      ),
+      ...rows.map((row) => headers.map((h) => `"${String((row as any)[h] ?? "").replace(/"/g, '""')}"`).join(",")),
     ].join("\n");
-
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -384,22 +319,6 @@ export default function AttendancePage() {
     a.click();
     URL.revokeObjectURL(url);
   }
-
-  function formatDT(dt: string) {
-    try {
-      return new Date(dt).toLocaleString();
-    } catch {
-      return dt;
-    }
-  }
-
-  // Helper to get profile picture URL
-  const getProfilePictureUrl = (attendance: AttendanceItem) => {
-    if (attendance.profile_picture_url) {
-      return `${API}${attendance.profile_picture_url}`;
-    }
-    return null;
-  };
 
   // ────────────────────────────────────────────────
   // JSX
@@ -416,11 +335,10 @@ export default function AttendancePage() {
 
       <main className="flex-1 overflow-auto p-8">
         <div className="mb-6 flex flex-col gap-3">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="text-sm text-gray-400">
-              {/* Backend API: <code className="bg-gray-800 px-2 py-1 rounded">{API}</code> */}
-            </div>
 
+          {/* Top bar */}
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div />
             <div className="flex items-center gap-3 flex-wrap">
               {savedSessions.length > 0 && (
                 <select
@@ -428,11 +346,7 @@ export default function AttendancePage() {
                   value={activeSessionId ?? ""}
                   onChange={(e) => {
                     const id = e.target.value;
-                    if (id) {
-                      setActiveSessionId(id);
-                      loadDetail(id);
-                      startPolling(id);
-                    }
+                    if (id) { setActiveSessionId(id); loadDetail(id); startPolling(id); }
                   }}
                 >
                   <option value="" disabled>Switch session...</option>
@@ -443,42 +357,23 @@ export default function AttendancePage() {
                   ))}
                 </select>
               )}
-
-              <Link
-                href="/teacher/attendance/planner"
-                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold hover:bg-indigo-500"
-              >
-                <CalendarClock size={16} />
-                Session Planner
+              <Link href="/teacher/attendance/planner"
+                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold hover:bg-indigo-500">
+                <CalendarClock size={16} /> Session Planner
               </Link>
-
-              <button
-                onClick={() => activeSessionId && loadDetail(activeSessionId)}
-                disabled={!activeSessionId}
-                className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm hover:bg-white/15 disabled:opacity-50"
-              >
-                <RefreshCw size={16} />
-                Refresh Now
+              <button onClick={() => activeSessionId && loadDetail(activeSessionId)} disabled={!activeSessionId}
+                className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm hover:bg-white/15 disabled:opacity-50">
+                <RefreshCw size={16} /> Refresh Now
               </button>
-
-              <button
-                onClick={exportCSV}
-                disabled={!session}
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
-              >
-                <Download size={16} />
-                Export CSV
+              <button onClick={exportCSV} disabled={!session}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50">
+                <Download size={16} /> Export CSV
               </button>
             </div>
           </div>
 
           {msg && (
-            <div
-              className={`rounded-lg border px-4 py-3 text-sm ${msg.includes("✅")
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-                : "border-red-500/40 bg-red-500/10 text-red-200"
-                }`}
-            >
+            <div className={`rounded-lg border px-4 py-3 text-sm ${msg.includes("✅") ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}`}>
               {msg}
             </div>
           )}
@@ -486,194 +381,285 @@ export default function AttendancePage() {
           {/* Stats */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-sm text-gray-300 flex items-center gap-2">
-                <Users size={16} className="opacity-80" />
-                Today Check-ins
-              </div>
+              <div className="text-sm text-gray-300 flex items-center gap-2"><Users size={16} className="opacity-80" /> Today Check-ins</div>
               <div className="mt-1 text-3xl font-bold">{presentCount}</div>
-              <div className="text-xs text-gray-400 mt-1">
-                Out of {session?.max_students ?? maxStudents} students
-              </div>
+              <div className="text-xs text-gray-400 mt-1">Out of {session?.max_students ?? maxStudents} students</div>
             </div>
-
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-sm text-gray-300 flex items-center gap-2">
-                <Clock size={16} className="opacity-80" />
-                PIN Expires In
-              </div>
-              <div className="mt-1 text-3xl font-bold">
-                {session ? `${expiresIn ?? "-"}s` : "-"}
-              </div>
-              <div className="text-xs text-gray-400 mt-1">
-                Remaining slots: {session?.remaining_slots ?? "-"}
-              </div>
+              <div className="text-sm text-gray-300 flex items-center gap-2"><Clock size={16} className="opacity-80" /> PIN Expires In</div>
+              <div className="mt-1 text-3xl font-bold">{session ? `${expiresIn ?? "-"}s` : "-"}</div>
+              <div className="text-xs text-gray-400 mt-1">Remaining slots: {session?.remaining_slots ?? "-"}</div>
             </div>
-
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-sm text-gray-300 flex items-center gap-2">
-                <AlertTriangle size={16} className="opacity-80" />
-                Absent Students
-              </div>
-              <div className="mt-1 text-3xl font-bold">-</div>
+              <div className="text-sm text-gray-300 flex items-center gap-2"><AlertTriangle size={16} className="opacity-80" /> Absent Students</div>
+              <div className="mt-1 text-3xl font-bold">{session ? session.max_students - presentCount : "-"}</div>
               <div className="text-xs text-gray-400 mt-1">Based on check-ins only</div>
             </div>
-
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="text-sm text-gray-300 flex items-center gap-2">
-                <TrendingUp size={16} className="opacity-80" />
-                Live Trend
-              </div>
+              <div className="text-sm text-gray-300 flex items-center gap-2"><TrendingUp size={16} className="opacity-80" /> Live Trend</div>
               <div className="mt-2 flex items-end gap-1 h-10">
                 {(liveCounts.length ? liveCounts : [0, 0, 0, 0]).map((v, i) => (
-                  <div
-                    key={i}
-                    className="w-full rounded-t bg-white/20"
-                    style={{
-                      height: `${Math.min(100, (v / Math.max(1, session?.max_students ?? 1)) * 100)}%`,
-                    }}
-                  />
+                  <div key={i} className="w-full rounded-t bg-white/20"
+                    style={{ height: `${Math.min(100, (v / Math.max(1, session?.max_students ?? 1)) * 100)}%` }} />
                 ))}
               </div>
-              <div className="text-xs text-gray-400 mt-2">
-                Last {liveCounts.length} updates
-              </div>
+              <div className="text-xs text-gray-400 mt-2">Last {liveCounts.length} updates</div>
             </div>
           </div>
+
+          {/* ── Classroom Seating Map ── */}
+          {session && (
+            <div className={`rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-pink-500/10 backdrop-blur transition-all duration-300 ${isMapExpanded ? "p-12" : "p-8"}`}>
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 shadow-lg shadow-indigo-500/10">
+                    <MapPin size={24} className="text-indigo-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+                      Classroom Seating Map
+                    </h2>
+                    <p className="text-sm text-gray-400 mt-1">{session.location} • Real-time occupancy view</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-6">
+                  {/* Legend */}
+                  <div className="flex items-center gap-6 text-sm bg-black/20 rounded-2xl px-6 py-3 border border-white/5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-4 h-4 rounded-full bg-emerald-500/80 border-2 border-emerald-400 shadow-lg shadow-emerald-500/30"></div>
+                      <span className="text-gray-300 font-medium">Present (selfie)</span>
+                    </div>
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-4 h-4 rounded-full bg-gray-700 border-2 border-gray-600"></div>
+                      <span className="text-gray-300 font-medium">Empty</span>
+                    </div>
+                    {/* Verification hint */}
+                    <div className="flex items-center gap-2.5">
+                      <ShieldCheck size={16} className="text-blue-400" />
+                      <span className="text-gray-400 text-xs">Hover to verify identity</span>
+                    </div>
+                  </div>
+
+                  <button onClick={() => setIsMapExpanded(!isMapExpanded)}
+                    className="p-3 rounded-xl bg-white/10 hover:bg-white/15 transition-all hover:scale-105 border border-white/5"
+                    title={isMapExpanded ? "Minimize" : "Expand"}>
+                    {isMapExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Front */}
+              <div className="mb-10 px-4">
+                <div className="h-1.5 bg-gradient-to-r from-transparent via-white/30 to-transparent rounded-full mb-3"></div>
+                <div className="text-center text-sm text-gray-400 font-semibold tracking-widest">FRONT • INSTRUCTOR AREA</div>
+              </div>
+
+              {/* Seating Grid */}
+              <div className={`grid ${isMapExpanded ? "gap-6 grid-cols-10 px-8 pt-8" : "gap-5 grid-cols-10 px-4 pt-6"} mx-auto max-w-full overflow-x-auto overflow-y-visible pb-2`}>
+                {classroomSeats.map((seat) => {
+                  const attendanceData = seat.student
+                    ? detail?.attendance?.find((a) => a.student_id === seat.student?.student_id)
+                    : null;
+                  const profilePicUrl = attendanceData ? getProfilePictureUrl(attendanceData) : null;
+
+                  // PRIMARY: selfie captured at check-in
+                  // FALLBACK: profile picture from student profile
+                  const primaryImage = attendanceData?.selfie_base64 ?? null;
+                  const fallbackImage = profilePicUrl;
+
+                  return (
+                    <div
+                      key={`${seat.row}-${seat.col}`}
+                      className={`
+                        relative group aspect-square rounded-2xl transition-all duration-300
+                        ${seat.isPresent
+                          ? "bg-emerald-500/15 border-[3px] border-emerald-400/70 shadow-xl shadow-emerald-500/30 hover:shadow-emerald-500/50 hover:scale-110 hover:-translate-y-1 hover:z-50"
+                          : seat.isEmpty
+                            ? "bg-gray-800/30 border-[3px] border-gray-700/40 hover:bg-gray-800/50 hover:border-gray-600/60"
+                            : "bg-gray-800/30 border-[3px] border-gray-700/40"
+                        }
+                        cursor-pointer backdrop-blur-sm
+                      `}
+                      title={seat.student ? `${seat.student.student_id} - ${seat.student.student_name}` : "Empty seat"}
+                    >
+                      {seat.isPresent && seat.student ? (
+                        <div className="relative w-full h-full p-1 overflow-hidden rounded-2xl">
+
+                          {/* Pulsing bg */}
+                          <div className="absolute inset-0 bg-emerald-400/20 animate-pulse rounded-xl -z-10"></div>
+
+                          {/* Image container — shows selfie by default, swaps to profile on hover */}
+                          <div className="relative w-full h-full rounded-xl overflow-hidden">
+
+                            {/* DEFAULT: selfie (proof of presence) */}
+                            {primaryImage ? (
+                              <img
+                                src={primaryImage}
+                                alt="Check-in selfie"
+                                className="w-full h-full object-cover transition-opacity duration-300 group-hover:opacity-0"
+                              />
+                            ) : fallbackImage ? (
+                              <img
+                                src={fallbackImage}
+                                alt={seat.student.student_name}
+                                className="w-full h-full object-cover transition-opacity duration-300 group-hover:opacity-0"
+                                onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/100?text=?"; }}
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-emerald-500/30 to-emerald-600/30 text-emerald-200 font-bold text-xl transition-opacity duration-300 group-hover:opacity-0">
+                                {seat.student.student_name.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+
+                            {/* HOVER: profile picture (registered identity for comparison) */}
+                            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                              {fallbackImage ? (
+                                <img
+                                  src={fallbackImage}
+                                  alt="Profile picture"
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/100?text=?"; }}
+                                />
+                              ) : primaryImage ? (
+                                // If no profile pic, keep showing selfie on hover too
+                                <img src={primaryImage} alt="selfie" className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-500/30 to-blue-600/30 text-blue-200 font-bold text-xl">
+                                  {seat.student.student_name.charAt(0).toUpperCase()}
+                                </div>
+                              )}
+
+                              {/* "Profile" label so teacher knows what they're seeing */}
+                              <div className="absolute top-1.5 left-1.5 bg-blue-600/90 backdrop-blur-sm text-[9px] text-white px-1.5 py-0.5 rounded-md font-semibold z-20 flex items-center gap-1">
+                                <ShieldCheck size={9} />
+                                ID Photo
+                              </div>
+                            </div>
+
+                            {/* Selfie label — only visible when NOT hovered */}
+                            <div className="absolute top-1.5 left-1.5 bg-emerald-600/90 backdrop-blur-sm text-[9px] text-white px-1.5 py-0.5 rounded-md font-semibold z-20 flex items-center gap-1 group-hover:opacity-0 transition-opacity duration-300">
+                              <span>📷</span> Live
+                            </div>
+
+                            {/* Bottom info overlay — name + IT number + status */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col items-center justify-end pb-2 px-1">
+                              <p className="text-[9px] font-bold text-emerald-300 text-center line-clamp-1 drop-shadow-lg mb-0.5">
+                                {seat.student.student_id}
+                              </p>
+                              <p className="text-[10px] font-bold text-white text-center line-clamp-1 drop-shadow-lg mb-0.5">
+                                {seat.student.student_name}
+                              </p>
+                              <div className="px-2 py-0.5 rounded-full bg-blue-500 text-[8px] font-semibold text-white shadow-lg">
+                                ✓ VERIFIED
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Status dot */}
+                          <div className="absolute top-2 right-2 z-10 pointer-events-none">
+                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-white shadow-lg shadow-emerald-500/50 animate-pulse"></div>
+                          </div>
+                        </div>
+                      ) : seat.isEmpty ? (
+                        <div className="w-full h-full flex items-center justify-center p-2">
+                          <div className="w-10 h-10 rounded-xl border-[3px] border-dashed border-gray-600/40"></div>
+                        </div>
+                      ) : null}
+
+                      {/* Seat number */}
+                      <div className="absolute bottom-1.5 right-1.5 bg-black/60 backdrop-blur-sm text-[10px] text-gray-300 px-2 py-0.5 rounded-md font-medium pointer-events-none z-20">
+                        {seat.seatIndex + 1}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Back */}
+              <div className="mt-10 px-4">
+                <div className="text-center text-sm text-gray-400 font-semibold tracking-widest mb-3">BACK • EXIT</div>
+                <div className="h-1.5 bg-gradient-to-r from-transparent via-white/20 to-transparent rounded-full"></div>
+              </div>
+
+              {/* Stats footer */}
+              <div className="mt-8 pt-6 border-t border-white/10 flex items-center justify-between text-sm flex-wrap gap-4">
+                <div className="flex items-center gap-8 flex-wrap">
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-2.5">
+                    <span className="text-gray-400 text-xs uppercase tracking-wider">Occupied</span>
+                    <div className="mt-0.5 font-bold text-emerald-400 text-lg">{presentCount} seats</div>
+                  </div>
+                  <div className="bg-gray-700/10 border border-gray-600/20 rounded-xl px-4 py-2.5">
+                    <span className="text-gray-400 text-xs uppercase tracking-wider">Vacancy</span>
+                    <div className="mt-0.5 font-bold text-gray-300 text-lg">{session.max_students - presentCount} seats</div>
+                  </div>
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-2.5">
+                    <span className="text-gray-400 text-xs uppercase tracking-wider">Occupancy Rate</span>
+                    <div className="mt-0.5 font-bold text-indigo-400 text-lg">
+                      {session.max_students > 0 ? Math.round((presentCount / session.max_students) * 100) : 0}%
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5 text-xs text-gray-400 bg-black/20 rounded-xl px-4 py-2.5 border border-white/5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-lg shadow-emerald-500/50"></span>
+                  <span className="font-medium">Live updates every 3s</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Lecture Setup */}
           <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
             <h2 className="mb-4 text-lg font-semibold">Lecture Setup</h2>
-
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="text-sm text-gray-300">
                 Module Code
-                <select
-                  className="mt-1 w-full rounded-lg bg-gray-900 border border-gray-700 p-2 text-white outline-none"
-                  value={moduleCode}
-                  onChange={(e) => setModuleCode(e.target.value)}
-                >
+                <select className="mt-1 w-full rounded-lg bg-gray-900 border border-gray-700 p-2 text-white outline-none"
+                  value={moduleCode} onChange={(e) => setModuleCode(e.target.value)}>
                   {["IT3071", "IT3061", "IT3041", "IT3021", "IT3011", "IT4010", "IT4030", "IT4041", "IT4011", "IT4031"].map((code) => (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
+                    <option key={code} value={code}>{code}</option>
                   ))}
                 </select>
               </label>
-
               <label className="text-sm text-gray-300">
                 Module Name (auto)
-                <input
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={moduleName}
-                  readOnly
-                />
+                <input className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={moduleName} readOnly />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Year
-                <input
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={year}
-                  onChange={(e) => setYear(e.target.value)}
-                />
+              <label className="text-sm text-gray-300">Year
+                <input className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={year} onChange={(e) => setYear(e.target.value)} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Faculty
-                <input
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={faculty}
-                  onChange={(e) => setFaculty(e.target.value)}
-                />
+              <label className="text-sm text-gray-300">Faculty
+                <input className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={faculty} onChange={(e) => setFaculty(e.target.value)} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Batch
-                <input
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={batch}
-                  onChange={(e) => setBatch(e.target.value)}
-                />
+              <label className="text-sm text-gray-300">Batch
+                <input className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={batch} onChange={(e) => setBatch(e.target.value)} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Location
-                <input
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                />
+              <label className="text-sm text-gray-300">Location
+                <input className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={location} onChange={(e) => setLocation(e.target.value)} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Start Time
-                <input
-                  type="datetime-local"
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                />
+              <label className="text-sm text-gray-300">Start Time
+                <input type="datetime-local" className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                End Time
-                <input
-                  type="datetime-local"
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
+              <label className="text-sm text-gray-300">End Time
+                <input type="datetime-local" className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Hours
-                <input
-                  type="number"
-                  step="0.5"
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={hours}
-                  onChange={(e) => setHours(Number(e.target.value))}
-                />
+              <label className="text-sm text-gray-300">Hours
+                <input type="number" step="0.5" className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={hours} onChange={(e) => setHours(Number(e.target.value))} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                Max Students
-                <input
-                  type="number"
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={maxStudents}
-                  onChange={(e) => setMaxStudents(Number(e.target.value))}
-                />
+              <label className="text-sm text-gray-300">Max Students
+                <input type="number" className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={maxStudents} onChange={(e) => setMaxStudents(Number(e.target.value))} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                PIN Expiry (minutes)
-                <input
-                  type="number"
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={expiryMinutes}
-                  onChange={(e) => setExpiryMinutes(Number(e.target.value))}
-                />
+              <label className="text-sm text-gray-300">PIN Expiry (minutes)
+                <input type="number" className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={expiryMinutes} onChange={(e) => setExpiryMinutes(Number(e.target.value))} />
               </label>
-
-              <label className="text-sm text-gray-300">
-                PIN Regen Limit
-                <input
-                  type="number"
-                  className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none"
-                  value={regenLimit}
-                  onChange={(e) => setRegenLimit(Number(e.target.value))}
-                />
+              <label className="text-sm text-gray-300">PIN Regen Limit
+                <input type="number" className="mt-1 w-full rounded-lg bg-black/20 border border-white/10 p-2 text-white outline-none" value={regenLimit} onChange={(e) => setRegenLimit(Number(e.target.value))} />
               </label>
             </div>
-
-            <button
-              onClick={createSession}
-              disabled={loading}
-              className="mt-5 w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-            >
+            <button onClick={createSession} disabled={loading}
+              className="mt-5 w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed transition-colors">
               {loading ? "Generating..." : "Generate PIN"}
             </button>
           </div>
@@ -694,50 +680,34 @@ export default function AttendancePage() {
                     <div className="flex items-center justify-between flex-wrap gap-4">
                       <div>
                         <div className="text-gray-300 text-sm">PIN</div>
-                        <div className="text-4xl font-bold tracking-widest font-mono">
-                          {session.pin}
-                        </div>
-                        <div className="mt-1 text-sm text-gray-400">
-                          Expires in: <span className="text-white font-medium">{expiresIn ?? "-"}s</span>
-                        </div>
-                        <div className="mt-1 text-xs text-gray-400">
-                          {session.module_code} • {session.batch} • {session.location}
-                        </div>
+                        <div className="text-4xl font-bold tracking-widest font-mono">{session.pin}</div>
+                        <div className="mt-1 text-sm text-gray-400">Expires in: <span className="text-white font-medium">{expiresIn ?? "-"}s</span></div>
+                        <div className="mt-1 text-xs text-gray-400">{session.module_code} • {session.batch} • {session.location}</div>
                       </div>
-
                       <div className="text-right">
                         <div className="text-gray-300 text-sm">Remaining Slots</div>
                         <div className="text-3xl font-bold">{session.remaining_slots}</div>
-                        <div className="mt-1 text-sm text-gray-400">
-                          Regen left: <span className="text-white">{session.regen_left}</span>
-                        </div>
+                        <div className="mt-1 text-sm text-gray-400">Regen left: <span className="text-white">{session.regen_left}</span></div>
                       </div>
                     </div>
-
-                    <button
-                      onClick={regeneratePin}
-                      disabled={session.regen_left <= 0}
-                      className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
+                    <button onClick={regeneratePin} disabled={session.regen_left <= 0}
+                      className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                       {session.regen_left <= 0 ? "Regeneration Limit Reached" : "Regenerate PIN"}
                     </button>
                   </div>
 
-                  {/* Live Check-ins with Profile Pictures */}
+                  {/* ── Live Check-ins Table ── */}
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                     <div className="mb-3 flex items-center justify-between">
-                      <div className="font-semibold">Live Check-ins ({presentCount})</div>
+                      <div className="font-semibold">Live Check Ins ({presentCount})</div>
                       <div className="flex items-center gap-2">
                         {pollingIntervalRef.current && (
                           <span className="text-xs text-emerald-400 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-                            Live
+                            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>Live
                           </span>
                         )}
-                        <button
-                          onClick={() => activeSessionId && loadDetail(activeSessionId)}
-                          className="rounded-lg bg-white/10 px-3 py-1 text-sm hover:bg-white/15 transition-colors"
-                        >
+                        <button onClick={() => activeSessionId && loadDetail(activeSessionId)}
+                          className="rounded-lg bg-white/10 px-3 py-1 text-sm hover:bg-white/15 transition-colors">
                           Refresh
                         </button>
                       </div>
@@ -747,8 +717,8 @@ export default function AttendancePage() {
                       <table className="w-full text-left text-sm">
                         <thead className="text-gray-300 sticky top-0 bg-gray-900 z-10">
                           <tr className="border-b border-white/10">
-                            <th className="py-2 px-2">Face</th>
-                            <th className="py-2 px-2">ID</th>
+                            <th className="py-2 px-2">Photo</th>
+                            <th className="py-2 px-2">ID Number</th>
                             <th className="py-2 px-2">Name</th>
                             <th className="py-2 px-2">Marked At</th>
                           </tr>
@@ -760,27 +730,18 @@ export default function AttendancePage() {
                               return (
                                 <tr key={a.student_id} className="border-b border-white/5 hover:bg-white/5">
                                   <td className="py-2 px-2">
-                                    {profilePicUrl ? (
-                                      <img
-                                        src={profilePicUrl}
-                                        alt={a.full_name || a.student_id}
-                                        className="h-10 w-10 rounded-full object-cover border border-gray-700"
-                                        onError={(e) => {
-                                          // Fallback to placeholder on error
-                                          (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40?text=?';
-                                        }}
-                                      />
-                                    ) : a.selfie_base64 ? (
-                                      <img
-                                        src={a.selfie_base64}
-                                        alt="selfie"
-                                        className="h-10 w-10 rounded-full object-cover border border-gray-700"
-                                      />
-                                    ) : (
-                                      <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
-                                        {(a.full_name || a.student_id).charAt(0).toUpperCase()}
-                                      </div>
-                                    )}
+                                    {/* Show ONLY profile picture */}
+                                    <div className="w-10 h-10 rounded-full overflow-hidden border border-gray-700">
+                                      {profilePicUrl ? (
+                                        <img src={profilePicUrl} alt="profile"
+                                          className="w-full h-full object-cover"
+                                          onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/40?text=?"; }} />
+                                      ) : (
+                                        <div className="w-full h-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
+                                          {(a.full_name || a.student_id).charAt(0).toUpperCase()}
+                                        </div>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="py-2 px-2">{a.student_id}</td>
                                   <td className="py-2 px-2">{a.full_name || a.student_name || "-"}</td>
@@ -790,9 +751,7 @@ export default function AttendancePage() {
                             })
                           ) : (
                             <tr>
-                              <td colSpan={4} className="py-8 text-center text-gray-500">
-                                No check-ins yet...
-                              </td>
+                              <td colSpan={4} className="py-8 text-center text-gray-500">No check-ins yet...</td>
                             </tr>
                           )}
                         </tbody>
@@ -803,19 +762,15 @@ export default function AttendancePage() {
               )}
             </div>
 
-            {/* Student Attendance Lookup – with profile pictures */}
+            {/* Student Attendance Lookup */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="mb-4 flex items-center justify-between gap-4 flex-wrap">
                 <h2 className="text-lg font-semibold">Student Attendance Lookup</h2>
-
                 <div className="relative w-full max-w-[360px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                  <input value={search} onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search by ID or name..."
-                    className="w-full bg-black/30 border border-gray-700 rounded-xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors"
-                  />
+                    className="w-full bg-black/30 border border-gray-700 rounded-xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors" />
                 </div>
               </div>
 
@@ -825,7 +780,7 @@ export default function AttendancePage() {
                     <tr className="border-b border-gray-700">
                       <th className="py-3 px-4">Photo</th>
                       <th className="py-3 px-4">Student</th>
-                      <th className="py-3 px-4">ID</th>
+                      <th className="py-3 px-4">ID Number</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Time</th>
                     </tr>
@@ -840,20 +795,18 @@ export default function AttendancePage() {
                           return (
                             <tr key={s.student_id} className="border-b border-gray-800 hover:bg-gray-800/50">
                               <td className="py-3 px-4">
-                                {profilePicUrl ? (
-                                  <img
-                                    src={profilePicUrl}
-                                    alt={s.student_name}
-                                    className="h-10 w-10 rounded-full object-cover border border-gray-700"
-                                    onError={(e) => {
-                                      (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40?text=?';
-                                    }}
-                                  />
-                                ) : (
-                                  <div className="h-10 w-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
-                                    {s.student_name.charAt(0).toUpperCase()}
-                                  </div>
-                                )}
+                                {/* Show ONLY profile picture */}
+                                <div className="w-12 h-12 rounded-full overflow-hidden border border-gray-700">
+                                  {profilePicUrl ? (
+                                    <img src={profilePicUrl} alt={s.student_name}
+                                      className="w-full h-full object-cover"
+                                      onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/48?text=?"; }} />
+                                  ) : (
+                                    <div className="w-full h-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
+                                      {s.student_name.charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                </div>
                               </td>
                               <td className="py-3 px-4 font-medium">{s.student_name}</td>
                               <td className="py-3 px-4">{s.student_id}</td>
@@ -862,30 +815,23 @@ export default function AttendancePage() {
                                   PRESENT
                                 </span>
                               </td>
-                              <td className="py-3 px-4 text-gray-400">
-                                {entry ? formatDT(entry.marked_at) : "-"}
-                              </td>
+                              <td className="py-3 px-4 text-gray-400">{entry ? formatDT(entry.marked_at) : "-"}</td>
                             </tr>
                           );
                         })
                       ) : (
                         <tr>
-                          <td colSpan={5} className="py-16 text-center text-gray-500">
-                            No students have checked in yet
-                          </td>
+                          <td colSpan={5} className="py-16 text-center text-gray-500">No students have checked in yet</td>
                         </tr>
                       )
                     ) : (
                       <tr>
-                        <td colSpan={5} className="py-16 text-center text-gray-500">
-                          Create a session to view attendance
-                        </td>
+                        <td colSpan={5} className="py-16 text-center text-gray-500">Create a session to view attendance</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
-
               <div className="mt-4 text-xs text-gray-500">
                 {session
                   ? `Showing real-time check-ins • ${presentCount} present • updates every ~3s`
