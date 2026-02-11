@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { ArrowLeft, UserCheck, BarChart3, Calendar, Camera, X, CheckCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, UserCheck, BarChart3, Calendar, Camera, X, CheckCircle, AlertCircle, AlertTriangle, TrendingDown } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -17,12 +17,24 @@ type MarkRes = {
   max_students?: number;
 };
 
-type ModuleAttendance = {
+type ModuleStats = {
   module_code: string;
   module_name: string;
   total_sessions: number;
-  present_sessions: number;
+  attended_sessions: number;
   attendance_percentage: number;
+  below_threshold: boolean;
+  sessions_needed_for_80: number;
+};
+
+type AttendanceStatistics = {
+  student_id: string;
+  overall_attendance_percentage: number;
+  total_sessions: number;
+  total_attended: number;
+  modules_below_threshold: number;
+  has_attendance_alert: boolean;
+  module_statistics: ModuleStats[];
 };
 
 type NotificationMessage = {
@@ -50,15 +62,14 @@ export default function StudentAttendancePage() {
     confidence?: number;
   } | null>(null);
 
-  // Camera permission modal
   const [showPermissionModal, setShowPermissionModal] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Module attendance history
-  const [moduleAttendance, setModuleAttendance] = useState<ModuleAttendance[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
+  // Attendance statistics
+  const [attendanceStats, setAttendanceStats] = useState<AttendanceStatistics | null>(null);
+  const [loadingStats, setLoadingStats] = useState(false);
 
   const [history, setHistory] = useState<
     { module_code: string; module_name: string; marked_at: string }[]
@@ -71,10 +82,10 @@ export default function StudentAttendancePage() {
     }
   }, [user]);
 
-  // Fetch module attendance history
+  // Fetch attendance statistics
   useEffect(() => {
     if (studentId) {
-      fetchModuleAttendance();
+      fetchAttendanceStatistics();
     }
   }, [studentId]);
 
@@ -87,7 +98,6 @@ export default function StudentAttendancePage() {
     };
   }, [cameraStream]);
 
-  // Ensure video plays when stream is set
   useEffect(() => {
     if (cameraStream && videoRef.current) {
       videoRef.current.srcObject = cameraStream;
@@ -99,98 +109,55 @@ export default function StudentAttendancePage() {
     }
   }, [cameraStream]);
 
-  // Helper function to show notifications
   const showNotification = (type: NotificationMessage['type'], message: string) => {
     setNotification({ type, message });
   };
 
-  // Clear notification
   const clearNotification = () => {
     setNotification(null);
   };
 
-  async function fetchModuleAttendance() {
+  async function fetchAttendanceStatistics() {
     if (!studentId.trim()) return;
 
-    setLoadingHistory(true);
+    setLoadingStats(true);
     try {
       const token = localStorage.getItem("token");
       if (!token) return;
 
-      const res = await fetch(`${API}/api/attendance/student/${studentId}/summary`, {
+      const res = await fetch(`${API}/api/attendance/student/${studentId}/statistics`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
 
       if (!res.ok) {
-        console.error("Failed to fetch module attendance");
+        console.error("Failed to fetch attendance statistics");
         return;
       }
 
       const json = await res.json();
-
-      const moduleMap = new Map<string, {
-        module_code: string;
-        module_name: string;
-        total: number;
-        present: number;
-      }>();
-
-      for (const record of json.records || []) {
-        if (!record.present) continue;
-
-        const key = record.module_code;
-        const existing = moduleMap.get(key);
-
-        if (!existing) {
-          moduleMap.set(key, {
-            module_code: record.module_code,
-            module_name: record.module_name,
-            total: 1,
-            present: 1,
-          });
-        } else {
-          existing.total += 1;
-          existing.present += 1;
-        }
-      }
-
-      const modules: ModuleAttendance[] = Array.from(moduleMap.values())
-        .filter(m => m.present > 0)
-        .map(m => ({
-          module_code: m.module_code,
-          module_name: m.module_name,
-          total_sessions: m.total,
-          present_sessions: m.present,
-          attendance_percentage: 100,
-        }))
-        .sort((a, b) => b.total_sessions - a.total_sessions);
-
-      setModuleAttendance(modules);
+      setAttendanceStats(json);
     } catch (err) {
-      console.error("Error fetching module attendance:", err);
+      console.error("Error fetching attendance statistics:", err);
     } finally {
-      setLoadingHistory(false);
+      setLoadingStats(false);
     }
   }
 
   async function startCamera() {
     try {
-      // Verify user authentication
       if (!user?.id) {
         showNotification('error', 'User authentication required. Please log in again.');
         return;
       }
 
-      // Check if user has a profile picture
       const token = localStorage.getItem("token");
       if (!token) {
         showNotification('error', 'Authentication token not found. Please log in again.');
         return;
       }
 
-      // Verify profile picture exists
       try {
         const profileCheckResponse = await fetch(`${API}/api/auth/users/${user.id}/profile-picture-base64`, {
           headers: { Authorization: `Bearer ${token}` }
@@ -205,7 +172,6 @@ export default function StudentAttendancePage() {
         return;
       }
 
-      // Check if HTTPS or localhost (required for getUserMedia)
       if (typeof window !== 'undefined') {
         const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
         if (!isSecure) {
@@ -227,9 +193,8 @@ export default function StudentAttendancePage() {
       setShowCamera(true);
       setVerificationResult(null);
       clearNotification();
-      setShowPermissionModal(false); // Close the modal
+      setShowPermissionModal(false);
 
-      // Small delay to ensure ref is ready
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -349,7 +314,6 @@ export default function StudentAttendancePage() {
         throw new Error("Authentication token not found. Please log in again.");
       }
 
-      // Get profile picture
       const profilePicResponse = await fetch(`${API}/api/auth/users/${user.id}/profile-picture-base64`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -360,7 +324,6 @@ export default function StudentAttendancePage() {
 
       const { profile_picture_base64 } = await profilePicResponse.json();
 
-      // Verify face
       const verifyResponse = await fetch(`${API}/api/attendance/verify-face`, {
         method: "POST",
         headers: {
@@ -428,7 +391,6 @@ export default function StudentAttendancePage() {
         throw new Error("Authentication session expired. Please log in again.");
       }
 
-      // Get profile picture base64
       const profilePicResponse = await fetch(`${API}/api/auth/users/${user?.id}/profile-picture-base64`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -477,7 +439,7 @@ export default function StudentAttendancePage() {
         ]);
       }
 
-      setTimeout(() => fetchModuleAttendance(), 1000);
+      setTimeout(() => fetchAttendanceStatistics(), 1000);
     } catch (err: any) {
       showNotification('error', err?.message || "An unexpected error occurred. Please try again.");
       console.error("Attendance error:", err);
@@ -485,24 +447,6 @@ export default function StudentAttendancePage() {
       setLoading(false);
     }
   }
-
-  const moduleStats = useMemo(() => {
-    const map = new Map<string, { module_name: string; count: number }>();
-    for (const h of history) {
-      const key = h.module_code;
-      const prev = map.get(key);
-      if (!prev) {
-        map.set(key, { module_name: h.module_name, count: 1 });
-      } else {
-        map.set(key, { module_name: prev.module_name, count: prev.count + 1 });
-      }
-    }
-    return Array.from(map.entries()).map(([module_code, v]) => ({
-      module_code,
-      module_name: v.module_name,
-      count: v.count,
-    }));
-  }, [history]);
 
   const maxStudents = data?.max_students ?? undefined;
   const remaining = typeof data?.remaining_slots === "number" ? data.remaining_slots : undefined;
@@ -550,15 +494,43 @@ export default function StudentAttendancePage() {
           </p>
         </header>
 
+        {/* ATTENDANCE ALERT BANNER */}
+        {attendanceStats?.has_attendance_alert && (
+          <div className="mb-6 rounded-xl border border-red-700/30 bg-red-950/50 p-5">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={24} className="text-red-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-red-300 mb-2 flex items-center gap-2">
+                  <TrendingDown size={20} />
+                  Attendance Alert: Action Required
+                </h3>
+                <p className="text-red-200 text-sm mb-3">
+                  Your overall attendance is <span className="font-bold">{attendanceStats.overall_attendance_percentage.toFixed(1)}%</span>.
+                  {attendanceStats.overall_attendance_percentage < 80 && " You are below the required 80% threshold."}
+                  {attendanceStats.modules_below_threshold > 0 && (
+                    <> You have <span className="font-bold">{attendanceStats.modules_below_threshold}</span> module(s) below 80% attendance.</>
+                  )}
+                </p>
+                <div className="bg-red-900/30 rounded-lg p-3 text-xs text-red-200">
+                  <p className="font-semibold mb-1">⚠️ Warning:</p>
+                  <p>Falling below 80% attendance may result in academic penalties or ineligibility for exams. Please attend classes regularly to maintain the minimum requirement.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {notification && (
           <div
             className={`mb-6 rounded-lg border px-4 py-3.5 text-sm flex items-start gap-3 ${notification.type === 'success'
-                ? "border-emerald-700/30 bg-emerald-950/50 text-emerald-300"
-                : notification.type === 'error'
-                  ? "border-red-700/30 bg-red-950/50 text-red-300"
-                  : notification.type === 'warning'
-                    ? "border-yellow-700/30 bg-yellow-950/50 text-yellow-300"
-                    : "border-blue-700/30 bg-blue-950/50 text-blue-300"
+              ? "border-emerald-700/30 bg-emerald-950/50 text-emerald-300"
+              : notification.type === 'error'
+                ? "border-red-700/30 bg-red-950/50 text-red-300"
+                : notification.type === 'warning'
+                  ? "border-yellow-700/30 bg-yellow-950/50 text-yellow-300"
+                  : "border-blue-700/30 bg-blue-950/50 text-blue-300"
               }`}
           >
             {notification.type === 'success' && <CheckCircle size={20} className="flex-shrink-0 mt-0.5" />}
@@ -786,124 +758,127 @@ export default function StudentAttendancePage() {
         {/* Hidden canvas for photo capture */}
         <canvas ref={canvasRef} style={{ display: "none" }} />
 
-        {/* Summary Cards & Charts */}
-        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* Attendance Statistics with 80% Monitoring */}
+        <div className="mt-10 grid grid-cols-1 gap-6">
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-            <div className="text-sm text-gray-400">Last Module</div>
-            <div className="mt-2 text-xl font-bold text-white">
-              {data?.module_name ?? "—"}
-            </div>
-            <div className="text-sm text-gray-500 mt-1">{data?.module_code ?? ""}</div>
-          </div>
-
-          <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-            <div className="text-sm text-gray-400">Attendance Records</div>
-            <div className="mt-2 text-3xl font-bold text-white">{history.length}</div>
-            <div className="text-sm text-gray-500 mt-1">This session</div>
-          </div>
-
-          <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-            <div className="text-sm text-gray-400">Remaining Slots</div>
-            <div className="mt-2 text-3xl font-bold text-white">
-              {typeof remaining === "number" ? remaining : "—"}
-            </div>
-            <div className="text-sm text-gray-500 mt-1">Current session</div>
-          </div>
-
-          {/* Module Attendance Overview */}
-          <div className="lg:col-span-3 bg-gray-800 rounded-xl border border-gray-700 p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="font-semibold text-gray-200 flex items-center gap-2">
                 <Calendar size={18} className="text-gray-400" />
-                My Module Attendance
+                My Attendance Progress
               </h2>
               <button
-                onClick={fetchModuleAttendance}
-                disabled={loadingHistory}
+                onClick={fetchAttendanceStatistics}
+                disabled={loadingStats}
                 className="text-xs text-gray-400 hover:text-gray-200 flex items-center gap-1 disabled:opacity-50"
               >
-                {loadingHistory ? "Loading..." : "Refresh"}
+                {loadingStats ? "Loading..." : "Refresh"}
               </button>
             </div>
 
-            {loadingHistory ? (
+            {loadingStats ? (
               <div className="text-sm text-gray-500 py-6 text-center">
-                Loading attendance history...
+                Loading attendance statistics...
               </div>
-            ) : moduleAttendance.length === 0 ? (
+            ) : !attendanceStats ? (
               <div className="text-sm text-gray-500 py-6 text-center">
-                No attendance records found. Mark attendance to see your progress.
+                No attendance data available yet.
               </div>
             ) : (
-              <div className="space-y-4">
-                {moduleAttendance.map((m) => (
-                  <div key={m.module_code} className="bg-gray-700/40 rounded-lg p-4">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <div className="font-medium text-gray-200">
-                          {m.module_code}
-                        </div>
-                        <div className="text-sm text-gray-400 mt-0.5">
-                          {m.module_name}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-white">
-                          {m.attendance_percentage}%
-                        </div>
-                        <div className="text-xs text-gray-400">
-                          {m.present_sessions}/{m.total_sessions} sessions
-                        </div>
+              <div className="space-y-6">
+                {/* Overall Progress */}
+                <div className="bg-gray-700/40 rounded-lg p-5 border border-gray-600">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <div className="text-sm text-gray-400">Overall Attendance</div>
+                      <div className="text-3xl font-bold text-white mt-1">
+                        {attendanceStats.overall_attendance_percentage.toFixed(1)}%
                       </div>
                     </div>
-                    <div className="h-3 rounded-full bg-gray-700 overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-500 transition-all duration-400"
-                        style={{ width: `${m.attendance_percentage}%` }}
-                      />
+                    <div className="text-right">
+                      <div className="text-sm text-gray-400">Sessions</div>
+                      <div className="text-xl font-semibold text-white mt-1">
+                        {attendanceStats.total_attended}/{attendanceStats.total_sessions}
+                      </div>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Session Activity Chart */}
-          <div className="lg:col-span-3 bg-gray-800 rounded-xl border border-gray-700 p-6">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="font-semibold text-gray-200 flex items-center gap-2">
-                <BarChart3 size={18} className="text-gray-400" />
-                Session Activity
-              </h2>
-              <div className="text-xs text-gray-500">Current session records</div>
-            </div>
-
-            {moduleStats.length === 0 ? (
-              <div className="text-sm text-gray-500 py-6 text-center">
-                No session activity yet. Mark once to see stats.
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {moduleStats.map((m) => {
-                  const max = Math.max(...moduleStats.map((x) => x.count), 1);
-                  const width = Math.round((m.count / max) * 100);
-                  return (
-                    <div key={m.module_code}>
-                      <div className="flex justify-between text-sm mb-1.5">
-                        <div className="font-medium text-gray-200">
-                          {m.module_code} — <span className="text-gray-400">{m.module_name}</span>
-                        </div>
-                        <div className="font-semibold text-white">{m.count}</div>
-                      </div>
-                      <div className="h-3 rounded-full bg-gray-700 overflow-hidden">
-                        <div
-                          className="h-full bg-emerald-500 transition-all duration-400"
-                          style={{ width: `${width}%` }}
-                        />
-                      </div>
+                  <div className="h-4 rounded-full bg-gray-700 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 ${attendanceStats.overall_attendance_percentage >= 80
+                          ? 'bg-emerald-500'
+                          : attendanceStats.overall_attendance_percentage >= 70
+                            ? 'bg-yellow-500'
+                            : 'bg-red-500'
+                        }`}
+                      style={{ width: `${Math.min(100, attendanceStats.overall_attendance_percentage)}%` }}
+                    />
+                  </div>
+                  {attendanceStats.overall_attendance_percentage < 80 && (
+                    <div className="mt-3 text-xs text-yellow-400 flex items-center gap-2">
+                      <AlertTriangle size={14} />
+                      <span>You need to maintain at least 80% attendance</span>
                     </div>
-                  );
-                })}
+                  )}
+                </div>
+
+                {/* Per-Module Statistics */}
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3">Module-wise Attendance</h3>
+                  <div className="space-y-3">
+                    {attendanceStats.module_statistics.map((module) => (
+                      <div
+                        key={module.module_code}
+                        className={`rounded-lg p-4 border ${module.below_threshold
+                            ? 'bg-red-950/30 border-red-700/30'
+                            : 'bg-gray-700/40 border-gray-600'
+                          }`}
+                      >
+                        <div className="flex justify-between items-start mb-3">
+                          <div className="flex-1">
+                            <div className="font-medium text-gray-200 flex items-center gap-2">
+                              {module.module_code}
+                              {module.below_threshold && (
+                                <span className="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full">
+                                  AT RISK
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-gray-400 mt-0.5">
+                              {module.module_name}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className={`text-2xl font-bold ${module.below_threshold ? 'text-red-400' : 'text-white'
+                              }`}>
+                              {module.attendance_percentage.toFixed(1)}%
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {module.attended_sessions}/{module.total_sessions} sessions
+                            </div>
+                          </div>
+                        </div>
+                        <div className="h-3 rounded-full bg-gray-700 overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-400 ${module.attendance_percentage >= 80
+                                ? 'bg-emerald-500'
+                                : module.attendance_percentage >= 70
+                                  ? 'bg-yellow-500'
+                                  : 'bg-red-500'
+                              }`}
+                            style={{ width: `${Math.min(100, module.attendance_percentage)}%` }}
+                          />
+                        </div>
+                        {module.below_threshold && (
+                          <div className="mt-2 text-xs text-red-300 flex items-center gap-2">
+                            <AlertTriangle size={12} />
+                            <span>
+                              Attend {module.sessions_needed_for_80} more session(s) to reach 80%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
           </div>

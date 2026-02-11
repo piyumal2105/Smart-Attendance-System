@@ -15,6 +15,9 @@ import {
   Maximize2,
   Minimize2,
   ShieldCheck,
+  History,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -45,11 +48,35 @@ type AttendanceItem = {
   profile_picture_url?: string;
   selfie_base64?: string;
   marked_at: string;
+  module_code?: string;
 };
 
 type SessionDetailRes = SessionRes & {
   attendance_count: number;
   attendance: AttendanceItem[];
+};
+
+type PastSession = {
+  session_id: string;
+  module_code: string;
+  module_name: string;
+  year: string;
+  faculty: string;
+  batch: string;
+  location: string;
+  start_time: string;
+  end_time: string;
+  hours: number;
+  max_students: number;
+  attendance_count: number;
+  attendance_percentage: number;
+  created_at: string;
+  attendees: {
+    student_id: string;
+    full_name: string;
+    profile_picture_url: string;
+    marked_at: string;
+  }[];
 };
 
 /** ---------------- Page ---------------- */
@@ -104,6 +131,12 @@ export default function AttendancePage() {
 
   const [isMapExpanded, setIsMapExpanded] = useState(false);
 
+  // NEW: Past sessions state
+  const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
+  const [loadingPastSessions, setLoadingPastSessions] = useState(false);
+  const [showPastSessions, setShowPastSessions] = useState(false);
+  const [expandedSession, setExpandedSession] = useState<string | null>(null);
+
   // ────────────────────────────────────────────────
   // Load Detail
   // ────────────────────────────────────────────────
@@ -132,6 +165,36 @@ export default function AttendancePage() {
       // silent
     }
   }, []);
+
+  // ────────────────────────────────────────────────
+  // NEW: Load Past Sessions
+  // ────────────────────────────────────────────────
+  const loadPastSessions = useCallback(async () => {
+    setLoadingPastSessions(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API}/api/attendance/teacher/sessions?limit=50`, {
+        headers: {
+          Accept: "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      setPastSessions(data.sessions || []);
+    } catch (err) {
+      console.error("Failed to load past sessions:", err);
+    } finally {
+      setLoadingPastSessions(false);
+    }
+  }, []);
+
+  // Load past sessions on mount
+  useEffect(() => {
+    loadPastSessions();
+  }, [loadPastSessions]);
 
   // ────────────────────────────────────────────────
   // WebSocket
@@ -202,6 +265,9 @@ export default function AttendancePage() {
       startPolling(data.session_id);
       setMsg(`✅ Session created! PIN: ${data.pin}`);
       setTimeout(() => setMsg(null), 7000);
+
+      // Reload past sessions
+      loadPastSessions();
     } catch (err: any) {
       setMsg(`❌ Failed: ${err.message}`);
     } finally {
@@ -254,6 +320,7 @@ export default function AttendancePage() {
       student_name: a.full_name || a.student_name || a.student_id,
       profile_picture_url: a.profile_picture_url,
       selfie_base64: a.selfie_base64,
+      module_code: a.module_code || detail.module_code,
     })) ?? [], [detail]);
 
   const filteredStudents = useMemo(() => {
@@ -272,6 +339,14 @@ export default function AttendancePage() {
 
   function formatDT(dt: string) {
     try { return new Date(dt).toLocaleString(); } catch { return dt; }
+  }
+
+  function formatDate(dt: string) {
+    try { return new Date(dt).toLocaleDateString(); } catch { return dt; }
+  }
+
+  function formatTime(dt: string) {
+    try { return new Date(dt).toLocaleTimeString(); } catch { return dt; }
   }
 
   // ────────────────────────────────────────────────
@@ -302,7 +377,7 @@ export default function AttendancePage() {
       const entry = presentMap.get(s.student_id);
       return {
         student_id: s.student_id, student_name: s.student_name, status: "PRESENT",
-        marked_at: formatDT(entry?.marked_at || ""), module_code: session.module_code,
+        marked_at: formatDT(entry?.marked_at || ""), module_code: s.module_code || session.module_code,
         module_name: session.module_name, batch: session.batch, faculty: session.faculty, year: session.year,
       };
     });
@@ -357,6 +432,13 @@ export default function AttendancePage() {
                   ))}
                 </select>
               )}
+              <button
+                onClick={() => setShowPastSessions(!showPastSessions)}
+                className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-3 py-2 text-sm font-semibold hover:bg-purple-500"
+              >
+                <History size={16} />
+                {showPastSessions ? "Hide" : "View"} Past Sessions
+              </button>
               <Link href="/teacher/attendance/planner"
                 className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold hover:bg-indigo-500">
                 <CalendarClock size={16} /> Session Planner
@@ -375,6 +457,132 @@ export default function AttendancePage() {
           {msg && (
             <div className={`rounded-lg border px-4 py-3 text-sm ${msg.includes("✅") ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-red-500/40 bg-red-500/10 text-red-200"}`}>
               {msg}
+            </div>
+          )}
+
+          {/* NEW: Past Sessions Section */}
+          {showPastSessions && (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <History size={20} className="text-purple-400" />
+                  Past Conducted Sessions
+                </h2>
+                <button
+                  onClick={loadPastSessions}
+                  disabled={loadingPastSessions}
+                  className="text-sm text-gray-400 hover:text-gray-200 flex items-center gap-1"
+                >
+                  <RefreshCw size={14} className={loadingPastSessions ? "animate-spin" : ""} />
+                  {loadingPastSessions ? "Loading..." : "Refresh"}
+                </button>
+              </div>
+
+              {loadingPastSessions ? (
+                <div className="text-center py-8 text-gray-500">Loading past sessions...</div>
+              ) : pastSessions.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">No past sessions found</div>
+              ) : (
+                <div className="space-y-3">
+                  {pastSessions.map((ps) => (
+                    <div key={ps.session_id} className="rounded-xl border border-gray-700 bg-gray-800/50 overflow-hidden">
+                      <div
+                        className="p-4 cursor-pointer hover:bg-gray-700/30 transition-colors"
+                        onClick={() => setExpandedSession(expandedSession === ps.session_id ? null : ps.session_id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2">
+                              <span className="text-lg font-bold text-white">{ps.module_code}</span>
+                              <span className="text-gray-400">•</span>
+                              <span className="text-sm text-gray-300">{ps.module_name}</span>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs text-gray-400">
+                              <span>{formatDate(ps.created_at)}</span>
+                              <span>•</span>
+                              <span>{ps.batch}</span>
+                              <span>•</span>
+                              <span>{ps.location}</span>
+                              <span>•</span>
+                              <span>{ps.hours}h</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-6">
+                            <div className="text-right">
+                              <div className="text-2xl font-bold text-white">{ps.attendance_count}</div>
+                              <div className="text-xs text-gray-400">/{ps.max_students} students</div>
+                            </div>
+                            <div className="text-right">
+                              <div className={`text-xl font-bold ${ps.attendance_percentage >= 80 ? 'text-emerald-400' : ps.attendance_percentage >= 70 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                {ps.attendance_percentage.toFixed(0)}%
+                              </div>
+                              <div className="text-xs text-gray-400">attendance</div>
+                            </div>
+                            {expandedSession === ps.session_id ? (
+                              <ChevronUp size={20} className="text-gray-400" />
+                            ) : (
+                              <ChevronDown size={20} className="text-gray-400" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {expandedSession === ps.session_id && (
+                        <div className="border-t border-gray-700 p-4 bg-gray-900/50">
+                          <h4 className="text-sm font-semibold text-gray-300 mb-3">
+                            Students Attended ({ps.attendees.length})
+                          </h4>
+                          {ps.attendees.length === 0 ? (
+                            <div className="text-sm text-gray-500 text-center py-4">
+                              No students attended this session
+                            </div>
+                          ) : (
+                            <div className="max-h-60 overflow-auto">
+                              <table className="w-full text-sm">
+                                <thead className="text-gray-400 border-b border-gray-700 sticky top-0 bg-gray-900">
+                                  <tr>
+                                    <th className="text-left py-2 px-3">Photo</th>
+                                    <th className="text-left py-2 px-3">Student ID</th>
+                                    <th className="text-left py-2 px-3">Name</th>
+                                    <th className="text-left py-2 px-3">Marked At</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {ps.attendees.map((att) => (
+                                    <tr key={att.student_id} className="border-b border-gray-800 hover:bg-gray-800/30">
+                                      <td className="py-2 px-3">
+                                        <div className="w-10 h-10 rounded-full overflow-hidden border border-gray-700">
+                                          {att.profile_picture_url ? (
+                                            <img
+                                              src={`${API}${att.profile_picture_url}`}
+                                              alt={att.full_name}
+                                              className="w-full h-full object-cover"
+                                              onError={(e) => {
+                                                (e.target as HTMLImageElement).src = "https://via.placeholder.com/40?text=?";
+                                              }}
+                                            />
+                                          ) : (
+                                            <div className="w-full h-full bg-gray-700 flex items-center justify-center text-gray-400 font-medium">
+                                              {att.full_name.charAt(0).toUpperCase()}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="py-2 px-3 text-gray-300">{att.student_id}</td>
+                                      <td className="py-2 px-3 text-gray-300">{att.full_name}</td>
+                                      <td className="py-2 px-3 text-gray-400 text-xs">{formatDT(att.marked_at)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -407,7 +615,7 @@ export default function AttendancePage() {
             </div>
           </div>
 
-          {/* ── Classroom Seating Map ── */}
+          {/* Classroom Seating Map */}
           {session && (
             <div className={`rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-pink-500/10 backdrop-blur transition-all duration-300 ${isMapExpanded ? "p-12" : "p-8"}`}>
               <div className="flex items-center justify-between mb-8">
@@ -424,7 +632,6 @@ export default function AttendancePage() {
                 </div>
 
                 <div className="flex items-center gap-6">
-                  {/* Legend */}
                   <div className="flex items-center gap-6 text-sm bg-black/20 rounded-2xl px-6 py-3 border border-white/5">
                     <div className="flex items-center gap-2.5">
                       <div className="w-4 h-4 rounded-full bg-emerald-500/80 border-2 border-emerald-400 shadow-lg shadow-emerald-500/30"></div>
@@ -434,7 +641,6 @@ export default function AttendancePage() {
                       <div className="w-4 h-4 rounded-full bg-gray-700 border-2 border-gray-600"></div>
                       <span className="text-gray-300 font-medium">Empty</span>
                     </div>
-                    {/* Verification hint */}
                     <div className="flex items-center gap-2.5">
                       <ShieldCheck size={16} className="text-blue-400" />
                       <span className="text-gray-400 text-xs">Hover to verify identity</span>
@@ -449,22 +655,17 @@ export default function AttendancePage() {
                 </div>
               </div>
 
-              {/* Front */}
               <div className="mb-10 px-4">
                 <div className="h-1.5 bg-gradient-to-r from-transparent via-white/30 to-transparent rounded-full mb-3"></div>
                 <div className="text-center text-sm text-gray-400 font-semibold tracking-widest">FRONT • INSTRUCTOR AREA</div>
               </div>
 
-              {/* Seating Grid */}
               <div className={`grid ${isMapExpanded ? "gap-6 grid-cols-10 px-8 pt-8" : "gap-5 grid-cols-10 px-4 pt-6"} mx-auto max-w-full overflow-x-auto overflow-y-visible pb-2`}>
                 {classroomSeats.map((seat) => {
                   const attendanceData = seat.student
                     ? detail?.attendance?.find((a) => a.student_id === seat.student?.student_id)
                     : null;
                   const profilePicUrl = attendanceData ? getProfilePictureUrl(attendanceData) : null;
-
-                  // PRIMARY: selfie captured at check-in
-                  // FALLBACK: profile picture from student profile
                   const primaryImage = attendanceData?.selfie_base64 ?? null;
                   const fallbackImage = profilePicUrl;
 
@@ -485,14 +686,8 @@ export default function AttendancePage() {
                     >
                       {seat.isPresent && seat.student ? (
                         <div className="relative w-full h-full p-1 overflow-hidden rounded-2xl">
-
-                          {/* Pulsing bg */}
                           <div className="absolute inset-0 bg-emerald-400/20 animate-pulse rounded-xl -z-10"></div>
-
-                          {/* Image container — shows selfie by default, swaps to profile on hover */}
                           <div className="relative w-full h-full rounded-xl overflow-hidden">
-
-                            {/* DEFAULT: selfie (proof of presence) */}
                             {primaryImage ? (
                               <img
                                 src={primaryImage}
@@ -512,7 +707,6 @@ export default function AttendancePage() {
                               </div>
                             )}
 
-                            {/* HOVER: profile picture (registered identity for comparison) */}
                             <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                               {fallbackImage ? (
                                 <img
@@ -522,7 +716,6 @@ export default function AttendancePage() {
                                   onError={(e) => { (e.target as HTMLImageElement).src = "https://via.placeholder.com/100?text=?"; }}
                                 />
                               ) : primaryImage ? (
-                                // If no profile pic, keep showing selfie on hover too
                                 <img src={primaryImage} alt="selfie" className="w-full h-full object-cover" />
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-500/30 to-blue-600/30 text-blue-200 font-bold text-xl">
@@ -530,19 +723,16 @@ export default function AttendancePage() {
                                 </div>
                               )}
 
-                              {/* "Profile" label so teacher knows what they're seeing */}
                               <div className="absolute top-1.5 left-1.5 bg-blue-600/90 backdrop-blur-sm text-[9px] text-white px-1.5 py-0.5 rounded-md font-semibold z-20 flex items-center gap-1">
                                 <ShieldCheck size={9} />
                                 ID Photo
                               </div>
                             </div>
 
-                            {/* Selfie label — only visible when NOT hovered */}
                             <div className="absolute top-1.5 left-1.5 bg-emerald-600/90 backdrop-blur-sm text-[9px] text-white px-1.5 py-0.5 rounded-md font-semibold z-20 flex items-center gap-1 group-hover:opacity-0 transition-opacity duration-300">
                               <span>📷</span> Live
                             </div>
 
-                            {/* Bottom info overlay — name + IT number + status */}
                             <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col items-center justify-end pb-2 px-1">
                               <p className="text-[9px] font-bold text-emerald-300 text-center line-clamp-1 drop-shadow-lg mb-0.5">
                                 {seat.student.student_id}
@@ -556,7 +746,6 @@ export default function AttendancePage() {
                             </div>
                           </div>
 
-                          {/* Status dot */}
                           <div className="absolute top-2 right-2 z-10 pointer-events-none">
                             <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-white shadow-lg shadow-emerald-500/50 animate-pulse"></div>
                           </div>
@@ -567,7 +756,6 @@ export default function AttendancePage() {
                         </div>
                       ) : null}
 
-                      {/* Seat number */}
                       <div className="absolute bottom-1.5 right-1.5 bg-black/60 backdrop-blur-sm text-[10px] text-gray-300 px-2 py-0.5 rounded-md font-medium pointer-events-none z-20">
                         {seat.seatIndex + 1}
                       </div>
@@ -576,13 +764,11 @@ export default function AttendancePage() {
                 })}
               </div>
 
-              {/* Back */}
               <div className="mt-10 px-4">
                 <div className="text-center text-sm text-gray-400 font-semibold tracking-widest mb-3">BACK • EXIT</div>
                 <div className="h-1.5 bg-gradient-to-r from-transparent via-white/20 to-transparent rounded-full"></div>
               </div>
 
-              {/* Stats footer */}
               <div className="mt-8 pt-6 border-t border-white/10 flex items-center justify-between text-sm flex-wrap gap-4">
                 <div className="flex items-center gap-8 flex-wrap">
                   <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-2.5">
@@ -696,7 +882,6 @@ export default function AttendancePage() {
                     </button>
                   </div>
 
-                  {/* ── Live Check-ins Table ── */}
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <div className="font-semibold">Live Check Ins ({presentCount})</div>
@@ -720,6 +905,7 @@ export default function AttendancePage() {
                             <th className="py-2 px-2">Photo</th>
                             <th className="py-2 px-2">ID Number</th>
                             <th className="py-2 px-2">Name</th>
+                            <th className="py-2 px-2">Module</th>
                             <th className="py-2 px-2">Marked At</th>
                           </tr>
                         </thead>
@@ -730,7 +916,6 @@ export default function AttendancePage() {
                               return (
                                 <tr key={a.student_id} className="border-b border-white/5 hover:bg-white/5">
                                   <td className="py-2 px-2">
-                                    {/* Show ONLY profile picture */}
                                     <div className="w-10 h-10 rounded-full overflow-hidden border border-gray-700">
                                       {profilePicUrl ? (
                                         <img src={profilePicUrl} alt="profile"
@@ -745,13 +930,14 @@ export default function AttendancePage() {
                                   </td>
                                   <td className="py-2 px-2">{a.student_id}</td>
                                   <td className="py-2 px-2">{a.full_name || a.student_name || "-"}</td>
-                                  <td className="py-2 px-2">{formatDT(a.marked_at)}</td>
+                                  <td className="py-2 px-2 font-mono text-xs text-emerald-400">{a.module_code || session.module_code}</td>
+                                  <td className="py-2 px-2 text-xs">{formatTime(a.marked_at)}</td>
                                 </tr>
                               );
                             })
                           ) : (
                             <tr>
-                              <td colSpan={4} className="py-8 text-center text-gray-500">No check-ins yet...</td>
+                              <td colSpan={5} className="py-8 text-center text-gray-500">No check-ins yet...</td>
                             </tr>
                           )}
                         </tbody>
@@ -781,6 +967,7 @@ export default function AttendancePage() {
                       <th className="py-3 px-4">Photo</th>
                       <th className="py-3 px-4">Student</th>
                       <th className="py-3 px-4">ID Number</th>
+                      <th className="py-3 px-4">Module</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Time</th>
                     </tr>
@@ -795,7 +982,6 @@ export default function AttendancePage() {
                           return (
                             <tr key={s.student_id} className="border-b border-gray-800 hover:bg-gray-800/50">
                               <td className="py-3 px-4">
-                                {/* Show ONLY profile picture */}
                                 <div className="w-12 h-12 rounded-full overflow-hidden border border-gray-700">
                                   {profilePicUrl ? (
                                     <img src={profilePicUrl} alt={s.student_name}
@@ -810,23 +996,24 @@ export default function AttendancePage() {
                               </td>
                               <td className="py-3 px-4 font-medium">{s.student_name}</td>
                               <td className="py-3 px-4">{s.student_id}</td>
+                              <td className="py-3 px-4 font-mono text-xs text-emerald-400">{s.module_code}</td>
                               <td className="py-3 px-4">
                                 <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-900/40 text-emerald-300 border border-emerald-700/50">
                                   PRESENT
                                 </span>
                               </td>
-                              <td className="py-3 px-4 text-gray-400">{entry ? formatDT(entry.marked_at) : "-"}</td>
+                              <td className="py-3 px-4 text-gray-400 text-xs">{entry ? formatTime(entry.marked_at) : "-"}</td>
                             </tr>
                           );
                         })
                       ) : (
                         <tr>
-                          <td colSpan={5} className="py-16 text-center text-gray-500">No students have checked in yet</td>
+                          <td colSpan={6} className="py-16 text-center text-gray-500">No students have checked in yet</td>
                         </tr>
                       )
                     ) : (
                       <tr>
-                        <td colSpan={5} className="py-16 text-center text-gray-500">Create a session to view attendance</td>
+                        <td colSpan={6} className="py-16 text-center text-gray-500">Create a session to view attendance</td>
                       </tr>
                     )}
                   </tbody>
