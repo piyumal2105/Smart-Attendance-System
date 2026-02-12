@@ -21,6 +21,7 @@ import {
   StopCircle,
   CheckCircle,
   XCircle,
+  GraduationCap,
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -142,7 +143,6 @@ export default function AttendancePage() {
   const [showPastSessions, setShowPastSessions] = useState(false);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
 
-  // NEW: Stop session modal state
   const [showStopModal, setShowStopModal] = useState(false);
 
   const loadDetail = useCallback(async (sessionId: string) => {
@@ -538,6 +538,16 @@ export default function AttendancePage() {
                   ))}
                 </select>
               )}
+
+              {/* ── NEW: Student Progress Link ── */}
+              <Link
+                href="/teacher/attendance/students-progress"
+                className="inline-flex items-center gap-2 rounded-xl bg-teal-600 px-3 py-2 text-sm font-semibold hover:bg-teal-500 transition-colors"
+              >
+                <GraduationCap size={16} />
+                Student Progress
+              </Link>
+
               <button
                 onClick={() => setShowPastSessions(!showPastSessions)}
                 className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-3 py-2 text-sm font-semibold hover:bg-purple-500"
@@ -1186,5 +1196,7 @@ export default function AttendancePage() {
     .animate-scaleIn {
       animation: scaleIn 0.2s ease-out;
     }
-`}</style> </div>);
-} 
+`}</style>
+    </div>
+  );
+}

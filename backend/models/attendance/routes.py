@@ -758,6 +758,143 @@ async def get_teacher_module_statistics(
     }
 
 
+@router.get("/attendance/teacher/students-progress")
+async def get_teacher_students_progress(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get comprehensive attendance progress for ALL students across ALL modules
+    conducted by the current teacher. Groups students by module and calculates
+    per-student attendance percentages with 80% threshold alerts.
+    """
+    from models.attendance.models import AttendanceSession, AttendanceRecord
+    from sqlalchemy import text, desc
+
+    if current_user.role.upper() != "TEACHER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only teachers can access this endpoint"
+        )
+
+    # Get all sessions conducted by this teacher
+    sessions = db.query(AttendanceSession).filter(
+        AttendanceSession.teacher_id == current_user.id
+    ).order_by(desc(AttendanceSession.created_at)).all()
+
+    if not sessions:
+        return {
+            "teacher_id": current_user.id,
+            "modules": [],
+            "total_modules": 0,
+            "total_students_at_risk": 0,
+            "message": "No sessions conducted yet"
+        }
+
+    # Group sessions by module_code
+    module_sessions: dict = {}
+    for session in sessions:
+        mc = session.module_code
+        if mc not in module_sessions:
+            module_sessions[mc] = {
+                "module_code": mc,
+                "module_name": session.module_name,
+                "sessions": []
+            }
+        module_sessions[mc]["sessions"].append(session)
+
+    modules_result = []
+    total_at_risk = 0
+
+    for module_code, module_data in module_sessions.items():
+        sess_list = module_data["sessions"]
+        total_sessions = len(sess_list)
+        session_ids = [s.session_id for s in sess_list]
+
+        # Get all unique students who attended at least one session in this module
+        rows = db.execute(
+            text("""
+                SELECT DISTINCT ar.student_id, sp.full_name, u.id as user_id, sp.profile_picture
+                FROM attendance_records ar
+                JOIN student_profiles sp ON sp.student_id = ar.student_id
+                JOIN users u ON u.id = sp.user_id
+                WHERE ar.session_id = ANY(:session_ids)
+                ORDER BY sp.full_name
+            """),
+            {"session_ids": session_ids}
+        ).fetchall()
+
+        student_stats = []
+        module_at_risk = 0
+
+        for row in rows:
+            student_id = row[0]
+            full_name = row[1]
+            user_id = row[2]
+
+            # Count how many sessions this student attended in this module
+            attended_count = db.query(AttendanceRecord).filter(
+                AttendanceRecord.student_id == student_id,
+                AttendanceRecord.session_id.in_(session_ids)
+            ).count()
+
+            attendance_pct = round((attended_count / total_sessions) * 100, 1) if total_sessions > 0 else 0.0
+            at_risk = attendance_pct < 80.0
+            if at_risk:
+                module_at_risk += 1
+
+            # Calculate sessions needed to reach 80%
+            sessions_needed = 0
+            if at_risk and total_sessions > 0:
+                required = total_sessions * 0.8
+                sessions_needed = max(0, int(required - attended_count) + 1)
+
+            # Get last attendance date
+            last_record = db.query(AttendanceRecord).filter(
+                AttendanceRecord.student_id == student_id,
+                AttendanceRecord.session_id.in_(session_ids)
+            ).order_by(desc(AttendanceRecord.marked_at)).first()
+
+            student_stats.append({
+                "student_id": student_id,
+                "full_name": full_name,
+                "profile_picture_url": f"/api/auth/users/{user_id}/profile-picture" if user_id else None,
+                "attended_sessions": attended_count,
+                "total_sessions": total_sessions,
+                "attendance_percentage": attendance_pct,
+                "at_risk": at_risk,
+                "sessions_needed_for_80": sessions_needed,
+                "last_attendance": last_record.marked_at.isoformat() if last_record else None
+            })
+
+        total_at_risk += module_at_risk
+
+        # Calculate module-level stats
+        avg_pct = round(
+            sum(s["attendance_percentage"] for s in student_stats) / len(student_stats), 1
+        ) if student_stats else 0.0
+
+        modules_result.append({
+            "module_code": module_code,
+            "module_name": module_data["module_name"],
+            "total_sessions": total_sessions,
+            "total_students": len(student_stats),
+            "students_at_risk": module_at_risk,
+            "average_attendance_percentage": avg_pct,
+            "students": sorted(student_stats, key=lambda x: x["attendance_percentage"])
+        })
+
+    # Sort modules: those with at-risk students first, then by module code
+    modules_result.sort(key=lambda m: (-m["students_at_risk"], m["module_code"]))
+
+    return {
+        "teacher_id": current_user.id,
+        "modules": modules_result,
+        "total_modules": len(modules_result),
+        "total_students_at_risk": total_at_risk
+    }
+
+
 @router.websocket("/attendance/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session = Depends(get_db)):
     """WebSocket for real-time attendance updates"""
