@@ -115,7 +115,8 @@ async def create_session(
         max_students=session_data.max_students,
         remaining_slots=session_data.max_students,
         regen_left=session_data.regen_limit,
-        teacher_id=current_user.id
+        teacher_id=current_user.id,
+        is_active=True  # Mark as active
     )
 
     db.add(new_session)
@@ -139,7 +140,8 @@ async def create_session(
         "pin_expires_at": new_session.pin_expires_at.isoformat(),
         "max_students": new_session.max_students,
         "remaining_slots": new_session.remaining_slots,
-        "regen_left": new_session.regen_left
+        "regen_left": new_session.regen_left,
+        "is_active": new_session.is_active
     }
 
 
@@ -190,7 +192,7 @@ async def get_session(
             "profile_picture_url": f"/api/auth/users/{student_row[0]}/profile-picture" if student_row else None,
             "marked_at": record.marked_at.isoformat(),
             "selfie_base64": record.selfie_base64,
-            "module_code": session.module_code  # NEW: Include module code
+            "module_code": session.module_code
         })
 
     return {
@@ -210,7 +212,8 @@ async def get_session(
         "remaining_slots": session.remaining_slots,
         "regen_left": session.regen_left,
         "attendance_count": len(attendance),
-        "attendance": attendance_data
+        "attendance": attendance_data,
+        "is_active": getattr(session, 'is_active', True)
     }
 
 
@@ -265,6 +268,53 @@ async def regenerate_pin(
     }
 
 
+# NEW ENDPOINT: Stop/End a session
+@router.post("/attendance/sessions/{session_id}/stop")
+async def stop_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Stop/End an active session - TEACHER ONLY"""
+
+    from models.attendance.models import AttendanceSession
+
+    if current_user.role.upper() != "TEACHER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only teachers can stop sessions"
+        )
+
+    session = db.query(AttendanceSession).filter(
+        AttendanceSession.session_id == session_id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.teacher_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only stop your own sessions"
+        )
+
+    # Mark session as inactive
+    session.is_active = False
+    session.end_time = datetime.utcnow()  # Update end time to now
+    
+    db.commit()
+    db.refresh(session)
+
+    return {
+        "message": "Session stopped successfully",
+        "session_id": session.session_id,
+        "module_code": session.module_code,
+        "module_name": session.module_name,
+        "is_active": session.is_active,
+        "ended_at": session.end_time.isoformat()
+    }
+
+
 @router.post("/attendance/checkin")
 async def checkin(
     request: CheckinRequest,
@@ -287,6 +337,10 @@ async def checkin(
 
     if not session:
         raise HTTPException(status_code=404, detail="Invalid PIN")
+
+    # Check if session is active
+    if hasattr(session, 'is_active') and not session.is_active:
+        raise HTTPException(status_code=400, detail="This session has been closed by the teacher")
 
     if datetime.utcnow() > session.pin_expires_at:
         raise HTTPException(status_code=400, detail="PIN has expired")
@@ -397,7 +451,8 @@ async def get_student_summary(
     return {"records": result}
 
 
-# NEW ENDPOINT: Get student attendance statistics with 80% threshold check
+# UPDATED ENDPOINT: Get student attendance statistics with 80% threshold check
+# NOW ONLY CALCULATES FOR ENROLLED MODULES (where student attended at least once)
 @router.get("/attendance/student/{student_id}/statistics")
 async def get_student_statistics(
     student_id: str,
@@ -406,10 +461,13 @@ async def get_student_statistics(
 ):
     """
     Get detailed attendance statistics for a student including:
-    - Total sessions conducted per module
+    - Total sessions conducted per module (ONLY for enrolled modules)
     - Sessions attended per module
     - Attendance percentage per module
     - Alert status if below 80%
+    
+    ⭐ KEY FEATURE: Only modules where the student has attended at least ONE session 
+    are considered "enrolled" and will be tracked for attendance calculation.
     """
     
     from models.attendance.models import AttendanceSession, AttendanceRecord
@@ -424,16 +482,41 @@ async def get_student_statistics(
                 detail="You can only view your own statistics"
             )
 
-    # Get all sessions (represents all conducted classes)
-    all_sessions = db.query(AttendanceSession).all()
-    
     # Get student's attendance records
     attendance_records = db.query(AttendanceRecord).filter(
         AttendanceRecord.student_id == student_id
     ).all()
     
+    # If no attendance records, return empty statistics
+    if not attendance_records:
+        return {
+            "student_id": student_id,
+            "overall_attendance_percentage": 0.0,
+            "total_sessions": 0,
+            "total_attended": 0,
+            "modules_below_threshold": 0,
+            "has_attendance_alert": False,
+            "enrolled_modules_count": 0,
+            "module_statistics": [],
+            "message": "No attendance records found. Attend at least one lecture to start tracking."
+        }
+    
     # Create a set of session IDs the student attended
     attended_session_ids = {record.session_id for record in attendance_records}
+    
+    # Get modules where student has attended at least one session (enrolled modules)
+    enrolled_module_codes = set()
+    for record in attendance_records:
+        session = db.query(AttendanceSession).filter(
+            AttendanceSession.session_id == record.session_id
+        ).first()
+        if session:
+            enrolled_module_codes.add(session.module_code)
+    
+    # Get all sessions ONLY for enrolled modules
+    all_sessions = db.query(AttendanceSession).filter(
+        AttendanceSession.module_code.in_(enrolled_module_codes)
+    ).all() if enrolled_module_codes else []
     
     # Group by module
     module_stats = {}
@@ -449,7 +532,8 @@ async def get_student_statistics(
                 "attended_sessions": 0,
                 "attendance_percentage": 0.0,
                 "below_threshold": False,
-                "sessions_needed_for_80": 0
+                "sessions_needed_for_80": 0,
+                "is_enrolled": True  # All modules in this list are enrolled
             }
         
         module_stats[module_code]["total_sessions"] += 1
@@ -479,7 +563,7 @@ async def get_student_statistics(
         key=lambda x: x["attendance_percentage"]
     )
     
-    # Overall statistics
+    # Overall statistics (only for enrolled modules)
     total_all_sessions = sum(s["total_sessions"] for s in stats_list)
     total_attended = sum(s["attended_sessions"] for s in stats_list)
     overall_percentage = (total_attended / total_all_sessions * 100) if total_all_sessions > 0 else 0.0
@@ -494,6 +578,7 @@ async def get_student_statistics(
         "total_attended": total_attended,
         "modules_below_threshold": modules_below_threshold,
         "has_attendance_alert": overall_percentage < 80.0 or modules_below_threshold > 0,
+        "enrolled_modules_count": len(enrolled_module_codes),
         "module_statistics": stats_list
     }
 
@@ -572,6 +657,7 @@ async def get_teacher_sessions(
             "attendance_count": attendance_count,
             "attendance_percentage": round((attendance_count / session.max_students * 100), 2) if session.max_students > 0 else 0,
             "created_at": session.created_at.isoformat(),
+            "is_active": getattr(session, 'is_active', True),
             "attendees": attendees
         })
     

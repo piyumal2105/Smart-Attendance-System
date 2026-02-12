@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { ArrowLeft, UserCheck, BarChart3, Calendar, Camera, X, CheckCircle, AlertCircle, AlertTriangle, TrendingDown } from "lucide-react";
+import { ArrowLeft, UserCheck, BarChart3, Calendar, Camera, X, CheckCircle, AlertCircle, AlertTriangle, TrendingDown, GraduationCap, BookOpen } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -25,6 +25,7 @@ type ModuleStats = {
   attendance_percentage: number;
   below_threshold: boolean;
   sessions_needed_for_80: number;
+  is_enrolled: boolean;
 };
 
 type AttendanceStatistics = {
@@ -34,7 +35,9 @@ type AttendanceStatistics = {
   total_attended: number;
   modules_below_threshold: number;
   has_attendance_alert: boolean;
+  enrolled_modules_count: number;
   module_statistics: ModuleStats[];
+  message?: string;
 };
 
 type NotificationMessage = {
@@ -494,8 +497,8 @@ export default function StudentAttendancePage() {
           </p>
         </header>
 
-        {/* ATTENDANCE ALERT BANNER */}
-        {attendanceStats?.has_attendance_alert && (
+        {/* ATTENDANCE ALERT BANNER - Only show for enrolled modules */}
+        {attendanceStats?.has_attendance_alert && attendanceStats.enrolled_modules_count > 0 && (
           <div className="mb-6 rounded-xl border border-red-700/30 bg-red-950/50 p-5">
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center flex-shrink-0">
@@ -517,6 +520,29 @@ export default function StudentAttendancePage() {
                   <p className="font-semibold mb-1">⚠️ Warning:</p>
                   <p>Falling below 80% attendance may result in academic penalties or ineligibility for exams. Please attend classes regularly to maintain the minimum requirement.</p>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* INFO BANNER - No attendance records yet */}
+        {attendanceStats?.message && attendanceStats.enrolled_modules_count === 0 && (
+          <div className="mb-6 rounded-xl border border-blue-700/30 bg-blue-950/50 p-5">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-full bg-blue-600/20 flex items-center justify-center flex-shrink-0">
+                <BookOpen size={24} className="text-blue-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-blue-300 mb-2 flex items-center gap-2">
+                  <GraduationCap size={20} />
+                  Start Your Attendance Journey
+                </h3>
+                <p className="text-blue-200 text-sm mb-2">
+                  You haven't attended any lectures yet. Once you attend your first lecture for a module, we'll start tracking your attendance for that course.
+                </p>
+                <p className="text-blue-300 text-xs">
+                  💡 Tip: Attend at least one lecture per module to enable attendance tracking and monitoring.
+                </p>
               </div>
             </div>
           </div>
@@ -758,13 +784,18 @@ export default function StudentAttendancePage() {
         {/* Hidden canvas for photo capture */}
         <canvas ref={canvasRef} style={{ display: "none" }} />
 
-        {/* Attendance Statistics with 80% Monitoring */}
+        {/* Attendance Statistics - Only Enrolled Modules */}
         <div className="mt-10 grid grid-cols-1 gap-6">
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="font-semibold text-gray-200 flex items-center gap-2">
                 <Calendar size={18} className="text-gray-400" />
                 My Attendance Progress
+                {attendanceStats && attendanceStats.enrolled_modules_count > 0 && (
+                  <span className="ml-2 text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">
+                    {attendanceStats.enrolled_modules_count} {attendanceStats.enrolled_modules_count === 1 ? 'Module' : 'Modules'} Enrolled
+                  </span>
+                )}
               </h2>
               <button
                 onClick={fetchAttendanceStatistics}
@@ -779,9 +810,16 @@ export default function StudentAttendancePage() {
               <div className="text-sm text-gray-500 py-6 text-center">
                 Loading attendance statistics...
               </div>
-            ) : !attendanceStats ? (
-              <div className="text-sm text-gray-500 py-6 text-center">
-                No attendance data available yet.
+            ) : !attendanceStats || attendanceStats.enrolled_modules_count === 0 ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-blue-500/10 flex items-center justify-center">
+                  <GraduationCap size={32} className="text-blue-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-200 mb-2">No Attendance Data Yet</h3>
+                <p className="text-sm text-gray-400 max-w-md mx-auto">
+                  You haven't attended any lectures yet. Once you attend your first lecture for a module,
+                  your attendance tracking will begin for that course.
+                </p>
               </div>
             ) : (
               <div className="space-y-6">
@@ -804,10 +842,10 @@ export default function StudentAttendancePage() {
                   <div className="h-4 rounded-full bg-gray-700 overflow-hidden">
                     <div
                       className={`h-full transition-all duration-500 ${attendanceStats.overall_attendance_percentage >= 80
-                          ? 'bg-emerald-500'
-                          : attendanceStats.overall_attendance_percentage >= 70
-                            ? 'bg-yellow-500'
-                            : 'bg-red-500'
+                        ? 'bg-emerald-500'
+                        : attendanceStats.overall_attendance_percentage >= 70
+                          ? 'bg-yellow-500'
+                          : 'bg-red-500'
                         }`}
                       style={{ width: `${Math.min(100, attendanceStats.overall_attendance_percentage)}%` }}
                     />
@@ -822,14 +860,14 @@ export default function StudentAttendancePage() {
 
                 {/* Per-Module Statistics */}
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-300 mb-3">Module-wise Attendance</h3>
+                  <h3 className="text-sm font-semibold text-gray-300 mb-3">Module-wise Attendance (Enrolled Modules Only)</h3>
                   <div className="space-y-3">
                     {attendanceStats.module_statistics.map((module) => (
                       <div
                         key={module.module_code}
                         className={`rounded-lg p-4 border ${module.below_threshold
-                            ? 'bg-red-950/30 border-red-700/30'
-                            : 'bg-gray-700/40 border-gray-600'
+                          ? 'bg-red-950/30 border-red-700/30'
+                          : 'bg-gray-700/40 border-gray-600'
                           }`}
                       >
                         <div className="flex justify-between items-start mb-3">
@@ -859,10 +897,10 @@ export default function StudentAttendancePage() {
                         <div className="h-3 rounded-full bg-gray-700 overflow-hidden">
                           <div
                             className={`h-full transition-all duration-400 ${module.attendance_percentage >= 80
-                                ? 'bg-emerald-500'
-                                : module.attendance_percentage >= 70
-                                  ? 'bg-yellow-500'
-                                  : 'bg-red-500'
+                              ? 'bg-emerald-500'
+                              : module.attendance_percentage >= 70
+                                ? 'bg-yellow-500'
+                                : 'bg-red-500'
                               }`}
                             style={{ width: `${Math.min(100, module.attendance_percentage)}%` }}
                           />

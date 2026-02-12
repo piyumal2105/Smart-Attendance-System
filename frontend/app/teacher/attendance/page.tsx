@@ -18,6 +18,9 @@ import {
   History,
   ChevronDown,
   ChevronUp,
+  StopCircle,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -39,6 +42,7 @@ type SessionRes = {
   max_students: number;
   remaining_slots: number;
   regen_left: number;
+  is_active?: boolean;
 };
 
 type AttendanceItem = {
@@ -71,6 +75,7 @@ type PastSession = {
   attendance_count: number;
   attendance_percentage: number;
   created_at: string;
+  is_active: boolean;
   attendees: {
     student_id: string;
     full_name: string;
@@ -121,6 +126,7 @@ export default function AttendancePage() {
   const [detail, setDetail] = useState<SessionDetailRes | null>(null);
 
   const [loading, setLoading] = useState(false);
+  const [stoppingSession, setStoppingSession] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
@@ -131,15 +137,14 @@ export default function AttendancePage() {
 
   const [isMapExpanded, setIsMapExpanded] = useState(false);
 
-  // NEW: Past sessions state
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
   const [loadingPastSessions, setLoadingPastSessions] = useState(false);
   const [showPastSessions, setShowPastSessions] = useState(false);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
 
-  // ────────────────────────────────────────────────
-  // Load Detail
-  // ────────────────────────────────────────────────
+  // NEW: Stop session modal state
+  const [showStopModal, setShowStopModal] = useState(false);
+
   const loadDetail = useCallback(async (sessionId: string) => {
     try {
       const token = localStorage.getItem("token");
@@ -166,9 +171,6 @@ export default function AttendancePage() {
     }
   }, []);
 
-  // ────────────────────────────────────────────────
-  // NEW: Load Past Sessions
-  // ────────────────────────────────────────────────
   const loadPastSessions = useCallback(async () => {
     setLoadingPastSessions(true);
     try {
@@ -191,14 +193,10 @@ export default function AttendancePage() {
     }
   }, []);
 
-  // Load past sessions on mount
   useEffect(() => {
     loadPastSessions();
   }, [loadPastSessions]);
 
-  // ────────────────────────────────────────────────
-  // WebSocket
-  // ────────────────────────────────────────────────
   useEffect(() => {
     if (!activeSessionId) return;
     const wsUrl = API.replace("http", "ws") + `/api/attendance/ws/${activeSessionId}`;
@@ -208,9 +206,6 @@ export default function AttendancePage() {
     return () => ws.close();
   }, [activeSessionId, loadDetail]);
 
-  // ────────────────────────────────────────────────
-  // Polling
-  // ────────────────────────────────────────────────
   const startPolling = useCallback((sessionId: string) => {
     if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     loadDetail(sessionId);
@@ -223,7 +218,6 @@ export default function AttendancePage() {
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
-  // Recover active session
   useEffect(() => {
     const savedId = localStorage.getItem("activeAttendanceSessionId");
     if (savedId && !activeSessionId) {
@@ -238,9 +232,6 @@ export default function AttendancePage() {
     else localStorage.removeItem("activeAttendanceSessionId");
   }, [activeSessionId]);
 
-  // ────────────────────────────────────────────────
-  // Create Session
-  // ────────────────────────────────────────────────
   async function createSession() {
     setLoading(true);
     setMsg(null);
@@ -266,7 +257,6 @@ export default function AttendancePage() {
       setMsg(`✅ Session created! PIN: ${data.pin}`);
       setTimeout(() => setMsg(null), 7000);
 
-      // Reload past sessions
       loadPastSessions();
     } catch (err: any) {
       setMsg(`❌ Failed: ${err.message}`);
@@ -275,9 +265,6 @@ export default function AttendancePage() {
     }
   }
 
-  // ────────────────────────────────────────────────
-  // Regenerate PIN
-  // ────────────────────────────────────────────────
   async function regeneratePin() {
     if (!session?.session_id) return;
     try {
@@ -298,9 +285,45 @@ export default function AttendancePage() {
     }
   }
 
-  // ────────────────────────────────────────────────
-  // Computed values
-  // ────────────────────────────────────────────────
+  async function confirmStopSession() {
+    if (!session?.session_id) return;
+
+    setShowStopModal(false);
+    setStoppingSession(true);
+
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API}/api/attendance/sessions/${session.session_id}/stop`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` })
+        },
+      });
+
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.detail || "Failed to stop session");
+      }
+
+      const data = await res.json();
+
+      setSession((prev) => prev ? { ...prev, is_active: false } : null);
+      stopPolling();
+      setActiveSessionId(null);
+      localStorage.removeItem("activeAttendanceSessionId");
+
+      setMsg(`✅ Session stopped successfully at ${new Date(data.ended_at).toLocaleTimeString()}`);
+      setTimeout(() => setMsg(null), 5000);
+
+      loadPastSessions();
+    } catch (err: any) {
+      setMsg(`❌ ${err.message}`);
+    } finally {
+      setStoppingSession(false);
+    }
+  }
+
   const expiresIn = useMemo(() => {
     if (!session) return null;
     return Math.max(0, Math.ceil((new Date(session.pin_expires_at).getTime() - Date.now()) / 1000));
@@ -331,9 +354,6 @@ export default function AttendancePage() {
     );
   }, [attendedStudents, search]);
 
-  // ────────────────────────────────────────────────
-  // Helpers
-  // ────────────────────────────────────────────────
   const getProfilePictureUrl = (a: AttendanceItem) =>
     a.profile_picture_url ? `${API}${a.profile_picture_url}` : null;
 
@@ -349,9 +369,6 @@ export default function AttendancePage() {
     try { return new Date(dt).toLocaleTimeString(); } catch { return dt; }
   }
 
-  // ────────────────────────────────────────────────
-  // Classroom Seating Map
-  // ────────────────────────────────────────────────
   const classroomSeats = useMemo(() => {
     const rows = 6;
     const cols = 10;
@@ -395,9 +412,8 @@ export default function AttendancePage() {
     URL.revokeObjectURL(url);
   }
 
-  // ────────────────────────────────────────────────
-  // JSX
-  // ────────────────────────────────────────────────
+  const isSessionActive = session?.is_active !== false;
+
   return (
     <div className="flex flex-col h-full bg-gray-900 text-white overflow-hidden">
       <header className="h-16 bg-gray-800/50 backdrop-blur border-b border-gray-700 flex items-center justify-between px-8 sticky top-0 z-10 shrink-0">
@@ -408,10 +424,100 @@ export default function AttendancePage() {
         </div>
       </header>
 
+      {/* CUSTOM STOP SESSION MODAL */}
+      {showStopModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn">
+          <div className="bg-gray-800 rounded-2xl border border-gray-700 max-w-md w-full shadow-2xl animate-scaleIn">
+            <div className="p-6 border-b border-gray-700">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center flex-shrink-0">
+                  <StopCircle size={24} className="text-red-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-xl font-semibold text-white mb-2">
+                    Stop Attendance Session?
+                  </h3>
+                  <p className="text-sm text-gray-300">
+                    You are about to end this attendance session permanently.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-yellow-950/30 border border-yellow-700/30 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-yellow-300 mb-2 flex items-center gap-2">
+                  <AlertTriangle size={16} />
+                  Warning: This action cannot be undone
+                </h4>
+                <ul className="space-y-2 text-sm text-yellow-200/80">
+                  <li className="flex items-start gap-2">
+                    <XCircle size={16} className="flex-shrink-0 mt-0.5" />
+                    <span>Students will no longer be able to check in</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <XCircle size={16} className="flex-shrink-0 mt-0.5" />
+                    <span>The PIN will become invalid immediately</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <XCircle size={16} className="flex-shrink-0 mt-0.5" />
+                    <span>Session will be marked as "STOPPED" in records</span>
+                  </li>
+                </ul>
+              </div>
+
+              {session && (
+                <div className="bg-gray-700/30 rounded-lg p-4">
+                  <div className="text-xs text-gray-400 mb-2">Session Details:</div>
+                  <div className="space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Module:</span>
+                      <span className="text-white font-medium">{session.module_code}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Batch:</span>
+                      <span className="text-white">{session.batch}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Current Attendance:</span>
+                      <span className="text-white">{presentCount}/{session.max_students} students</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 border-t border-gray-700 flex gap-3">
+              <button
+                onClick={() => setShowStopModal(false)}
+                className="flex-1 rounded-xl bg-gray-700 px-4 py-3 font-semibold text-white hover:bg-gray-600 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmStopSession}
+                disabled={stoppingSession}
+                className="flex-1 rounded-xl bg-red-600 px-4 py-3 font-semibold text-white hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {stoppingSession ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    Stopping...
+                  </>
+                ) : (
+                  <>
+                    <StopCircle size={18} />
+                    Yes, Stop Session
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 overflow-auto p-8">
         <div className="mb-6 flex flex-col gap-3">
-
-          {/* Top bar */}
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div />
             <div className="flex items-center gap-3 flex-wrap">
@@ -460,7 +566,13 @@ export default function AttendancePage() {
             </div>
           )}
 
-          {/* NEW: Past Sessions Section */}
+          {session && !isSessionActive && (
+            <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200 flex items-center gap-2">
+              <AlertTriangle size={18} />
+              <span>This session has been stopped. No new check-ins are allowed.</span>
+            </div>
+          )}
+
           {showPastSessions && (
             <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
               <div className="flex items-center justify-between mb-4">
@@ -496,6 +608,11 @@ export default function AttendancePage() {
                               <span className="text-lg font-bold text-white">{ps.module_code}</span>
                               <span className="text-gray-400">•</span>
                               <span className="text-sm text-gray-300">{ps.module_name}</span>
+                              {!ps.is_active && (
+                                <span className="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full">
+                                  STOPPED
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-4 text-xs text-gray-400">
                               <span>{formatDate(ps.created_at)}</span>
@@ -586,7 +703,6 @@ export default function AttendancePage() {
             </div>
           )}
 
-          {/* Stats */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <div className="text-sm text-gray-300 flex items-center gap-2"><Users size={16} className="opacity-80" /> Today Check-ins</div>
@@ -615,7 +731,6 @@ export default function AttendancePage() {
             </div>
           </div>
 
-          {/* Classroom Seating Map */}
           {session && (
             <div className={`rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-pink-500/10 backdrop-blur transition-all duration-300 ${isMapExpanded ? "p-12" : "p-8"}`}>
               <div className="flex items-center justify-between mb-8">
@@ -796,7 +911,6 @@ export default function AttendancePage() {
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          {/* Lecture Setup */}
           <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
             <h2 className="mb-4 text-lg font-semibold">Lecture Setup</h2>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -850,7 +964,6 @@ export default function AttendancePage() {
             </button>
           </div>
 
-          {/* Live Session + Lookup */}
           <div className="space-y-6">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="mb-4 text-lg font-semibold">Live Session</h2>
@@ -876,17 +989,47 @@ export default function AttendancePage() {
                         <div className="mt-1 text-sm text-gray-400">Regen left: <span className="text-white">{session.regen_left}</span></div>
                       </div>
                     </div>
-                    <button onClick={regeneratePin} disabled={session.regen_left <= 0}
-                      className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-                      {session.regen_left <= 0 ? "Regeneration Limit Reached" : "Regenerate PIN"}
-                    </button>
+
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <button
+                        onClick={regeneratePin}
+                        disabled={session.regen_left <= 0 || !isSessionActive}
+                        className="rounded-xl bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {session.regen_left <= 0 ? "Regen Limit Reached" : "Regenerate PIN"}
+                      </button>
+
+                      <button
+                        onClick={() => setShowStopModal(true)}
+                        disabled={stoppingSession || !isSessionActive}
+                        className="rounded-xl bg-red-600 px-4 py-2 font-semibold hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+                      >
+                        {!isSessionActive ? (
+                          <>
+                            <CheckCircle size={16} />
+                            Session Stopped
+                          </>
+                        ) : (
+                          <>
+                            <StopCircle size={16} />
+                            Stop Session
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {!isSessionActive && (
+                      <div className="mt-3 text-xs text-red-300 text-center">
+                        This session has been stopped. Students can no longer check in.
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <div className="font-semibold">Live Check Ins ({presentCount})</div>
                       <div className="flex items-center gap-2">
-                        {pollingIntervalRef.current && (
+                        {pollingIntervalRef.current && isSessionActive && (
                           <span className="text-xs text-emerald-400 flex items-center gap-1">
                             <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>Live
                           </span>
@@ -948,7 +1091,6 @@ export default function AttendancePage() {
               )}
             </div>
 
-            {/* Student Attendance Lookup */}
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="mb-4 flex items-center justify-between gap-4 flex-wrap">
                 <h2 className="text-lg font-semibold">Student Attendance Lookup</h2>
@@ -1028,6 +1170,21 @@ export default function AttendancePage() {
           </div>
         </div>
       </main>
-    </div>
-  );
-}
+
+      <style jsx global>{`
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes scaleIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .animate-fadeIn {
+      animation: fadeIn 0.2s ease-out;
+    }
+    .animate-scaleIn {
+      animation: scaleIn 0.2s ease-out;
+    }
+`}</style> </div>);
+} 

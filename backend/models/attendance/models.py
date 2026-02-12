@@ -22,7 +22,8 @@ class AttendanceSession(Base):
     max_students = Column(Integer)
     remaining_slots = Column(Integer)
     regen_left = Column(Integer)
-    teacher_id = Column(Integer, ForeignKey("users.id"))  # ADDED THIS
+    teacher_id = Column(Integer, ForeignKey("users.id"))
+    is_active = Column(Boolean, default=True, nullable=False)  # ← ADD THIS LINE
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
